@@ -1,0 +1,1888 @@
+const percentFormatter = new Intl.NumberFormat("pl-PL", {
+    maximumFractionDigits: 2,
+});
+
+const numberFormatter = new Intl.NumberFormat("pl-PL", {
+    maximumFractionDigits: 4,
+});
+
+let dashboardState = null;
+let selectedSymbol = null;
+let selectedSector = "ALL";
+let selectedChartTab = "overview";
+let selectedHistoryMode = "recent";
+let selectedLifecycleInterval = "auto";
+let chartHistoryCache = {};
+let chartPackageCache = {};
+let chartHoverState = null;
+let chartHoverHandlersBound = false;
+let dashboardRefreshTimerId = null;
+
+const chartTabs = [
+    { id: "overview", label: "Wszystko" },
+    { id: "price", label: "Cena" },
+    { id: "volume", label: "Wolumen" },
+    { id: "rsi", label: "RSI" },
+    { id: "macd", label: "MACD" },
+];
+
+const historyModes = [
+    { id: "recent", label: "Ostatnie 60" },
+    { id: "max", label: "Cala historia" },
+];
+
+const lifecycleIntervals = [
+    { id: "auto", label: "Auto" },
+    { id: "1d", label: "1D" },
+    { id: "1w", label: "1W" },
+    { id: "1m", label: "1M" },
+];
+
+const INITIAL_RENDER_RETRY_ATTEMPTS = 6;
+const INITIAL_RENDER_RETRY_DELAY_MS = 1500;
+
+async function fetchDashboard() {
+    const response = await fetch("/api/dashboard");
+    if (!response.ok) {
+        throw new Error("Nie udalo sie pobrac dashboardu.");
+    }
+    return response.json();
+}
+
+async function renderDashboard() {
+    setStatus("Odswiezanie danych...");
+    const payload = await fetchDashboard();
+    await applyDashboardPayload(payload, true);
+    setStatus(`Ostatnie odswiezenie: ${new Date().toLocaleTimeString("pl-PL")}`);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function renderDashboardWithRetry(attempts = INITIAL_RENDER_RETRY_ATTEMPTS, delayMs = INITIAL_RENDER_RETRY_DELAY_MS) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+            await renderDashboard();
+            return;
+        } catch (error) {
+            lastError = error;
+            if (attempt === attempts) {
+                break;
+            }
+            setStatus(`Ladowanie danych nie powiodlo sie. Ponawiam (${attempt + 1}/${attempts})...`);
+            await sleep(delayMs);
+        }
+    }
+    throw lastError;
+}
+
+function syncSelectedSymbol(payload) {
+    const symbols = (payload.market || []).map((row) => row.symbol);
+    if (!symbols.length) {
+        selectedSymbol = null;
+        return;
+    }
+    if (!selectedSymbol || !symbols.includes(selectedSymbol)) {
+        selectedSymbol = payload.chart_focus_symbol || symbols[0];
+    }
+}
+
+async function applyDashboardPayload(payload, resetChartCache = true) {
+    dashboardState = payload;
+    if (resetChartCache) {
+        chartPackageCache = {};
+    }
+    syncSelectedSymbol(payload);
+    paintWallet(payload.wallet);
+    paintModeStrip(payload.system_status, payload.config, payload.wallet);
+    paintAgentMode(payload.system_status, payload.config);
+    paintCapitalSummary(payload.wallet);
+    paintApiUsage(payload.api_usage);
+    paintBoughtCoins(payload.wallet.positions);
+    paintTradeBuckets(payload.recent_trades);
+    paintSectorFilters(payload.config);
+    paintMarket(payload.market);
+    paintPositions(payload.wallet.positions);
+    paintDecisions(payload.recent_decisions);
+    paintTrades(payload.recent_trades);
+    paintChartSelector();
+    paintChartTabs();
+    paintChartRangeSwitcher();
+    paintLifecycleIntervalSwitcher();
+    scheduleDashboardAutoRefresh();
+    try {
+        await renderSelectedChart();
+    } catch (error) {
+        paintChartError(error.message || "Nie udalo sie zaladowac wykresu.");
+    }
+    paintLearning(payload.learning);
+    paintArticles(payload.articles);
+    paintSystemStatus(payload.system_status);
+    paintBacktest(payload.backtest);
+}
+
+function paintChartError(message) {
+    document.getElementById("price-chart").innerHTML = "";
+    document.getElementById("chart-summary").innerHTML = `<div class="empty-state">${message}</div>`;
+    document.getElementById("chart-insights").innerHTML = "";
+    setChartHoverState(null);
+}
+
+function paintWallet(wallet) {
+    document.getElementById("cash-balance").textContent = formatQuote(wallet.cash_balance);
+    document.getElementById("equity").textContent = formatQuote(wallet.equity);
+    document.getElementById("buy-count").textContent = String(wallet.buy_count);
+    document.getElementById("sell-count").textContent = String(wallet.sell_count);
+    document.getElementById("open-positions-count").textContent = String(wallet.open_positions_count);
+    document.getElementById("gross-profit").textContent = formatQuote(wallet.gross_profit);
+    document.getElementById("gross-loss").textContent = formatQuote(wallet.gross_loss);
+    document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
+    document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
+    paintQuickSummary(wallet);
+}
+
+function paintModeStrip(systemStatus, config, wallet) {
+    const container = document.getElementById("mode-strip");
+    const scheduler = systemStatus?.scheduler || {};
+    const schedulerActive = Boolean(scheduler.active);
+    const schedulerHealth = scheduler.health || (schedulerActive ? "active" : scheduler.enabled ? "stale" : "stopped");
+    const schedulerLabel = schedulerHealth === "active" ? "DZIALA CALY CZAS" : schedulerHealth === "stale" ? "SCHEDULER UTKNAL" : "AUTO OFF";
+    const schedulerTone = schedulerHealth === "active" ? "buy" : schedulerHealth === "stale" ? "sell" : "sell";
+    const paperMode = (config?.trading_mode || systemStatus?.trading_mode || "PAPER") === "PAPER";
+    const dataSources = (systemStatus?.data_sources || []).join(", ");
+    const preferredQuotes = (systemStatus?.preferred_trade_quotes || []).join(" / ");
+    const lastClosed = wallet?.last_closed_trade;
+    const lastClosedMarkup = lastClosed
+        ? `${lastClosed.symbol}: ${formatQuote(lastClosed.profit)} o ${new Date(lastClosed.closed_at).toLocaleTimeString("pl-PL")}`
+        : "brak zamknietych transakcji";
+
+    container.innerHTML = `
+        <div class="mode-chip-group">
+            <span class="status-pill ${paperMode ? "hold" : "sell"}">${paperMode ? "TRYB PAPER" : "TRYB LIVE"}</span>
+            <span class="status-pill ${schedulerTone}">${schedulerLabel}</span>
+            <span class="status-pill neutral">DANE: ${dataSources || "brak"}</span>
+        </div>
+        <div class="mode-strip-copy">
+            <strong>${paperMode ? "To juz dziala na zywych danych rynkowych, ale handluje tylko wirtualnym kapitalem." : "System jest gotowy do realnych zlecen."}</strong>
+            <span>Ostatni zamkniety trade: ${lastClosedMarkup}</span>
+            <span>Agent pracuje na parach o najlepszej plynnosci: ${preferredQuotes || "USDT"}. Głowna sciezka to ${config?.quote_currency || "USD"}/${config?.display_currency || config?.quote_currency} w widoku oraz USDT do par tradingowych.</span>
+            <div class="mode-live-metrics">
+                <span id="cycle-running-counter" class="status-pill neutral">Cykl teraz: -</span>
+                <span id="last-cycle-counter" class="status-pill neutral">Ostatni cykl: -</span>
+                <span id="next-cycle-counter" class="status-pill neutral">Nastepny cykl: -</span>
+                <span id="live-quote-age-counter" class="status-pill neutral">Live quote: -</span>
+                <span id="last-decision-counter" class="status-pill neutral">Decyzja: -</span>
+                <span class="status-pill neutral">Analiza: ${systemStatus?.market_interval || config?.market_interval || "-"}</span>
+                <span class="status-pill neutral">UI refresh: ${config?.dashboard_refresh_seconds || 10}s</span>
+            </div>
+        </div>
+    `;
+    updateAgentPulseStrip();
+}
+
+function scheduleDashboardAutoRefresh() {
+    const refreshSeconds = Math.max(5, Number(dashboardState?.config?.dashboard_refresh_seconds || 10));
+    if (dashboardRefreshTimerId !== null) {
+        window.clearInterval(dashboardRefreshTimerId);
+    }
+    dashboardRefreshTimerId = window.setInterval(() => {
+        renderDashboard().catch((error) => setStatus(error.message));
+    }, refreshSeconds * 1000);
+}
+
+function updateAgentPulseStrip() {
+    const scheduler = dashboardState?.system_status?.scheduler;
+    const marketRows = dashboardState?.market || [];
+    const focusRow = marketRows.find((row) => row.symbol === selectedSymbol) || marketRows[0] || null;
+    const recentDecisions = dashboardState?.recent_decisions || [];
+    const focusDecision = recentDecisions.find((row) => row.symbol === focusRow?.symbol)
+        || (focusRow ? {
+            symbol: focusRow.symbol,
+            decision: focusRow.decision,
+            confidence: focusRow.confidence,
+            timestamp: focusRow.decision_timestamp,
+        } : null);
+    const cycleRunningElement = document.getElementById("cycle-running-counter");
+    const lastCycleElement = document.getElementById("last-cycle-counter");
+    const nextCycleElement = document.getElementById("next-cycle-counter");
+    const liveQuoteElement = document.getElementById("live-quote-age-counter");
+    const lastDecisionElement = document.getElementById("last-decision-counter");
+
+    if (cycleRunningElement) {
+        if (scheduler?.is_running) {
+            cycleRunningElement.className = "status-pill hold live-pulse";
+            cycleRunningElement.textContent = `Cykl teraz: trwa od ${formatElapsedTime(scheduler?.current_run_started_at)}`;
+        } else if (scheduler?.active) {
+            cycleRunningElement.className = "status-pill neutral";
+            cycleRunningElement.textContent = "Cykl teraz: czeka";
+        } else {
+            cycleRunningElement.className = "status-pill sell";
+            cycleRunningElement.textContent = "Cykl teraz: off";
+        }
+    }
+
+    if (lastCycleElement) {
+        lastCycleElement.textContent = `Ostatni cykl: ${formatRelativeTime(scheduler?.last_run_completed_at)}`;
+    }
+    if (nextCycleElement) {
+        nextCycleElement.textContent = `Nastepny cykl: ${formatNextCycle(scheduler)}`;
+    }
+    if (liveQuoteElement) {
+        const symbolLabel = focusRow?.symbol || "quote";
+        liveQuoteElement.textContent = `Live quote ${symbolLabel}: ${formatRelativeTime(focusRow?.timestamp)}`;
+    }
+    if (lastDecisionElement) {
+        const symbolLabel = focusDecision?.symbol || focusRow?.symbol || "coin";
+        const decisionLabel = focusDecision?.decision || "-";
+        const confidenceLabel = Number.isFinite(Number(focusDecision?.confidence))
+            ? ` ${percentFormatter.format(Number(focusDecision.confidence))}%`
+            : "";
+        lastDecisionElement.className = `status-pill ${decisionToneClass(decisionLabel)}`;
+        lastDecisionElement.textContent = `Decyzja ${symbolLabel}: ${decisionLabel}${confidenceLabel} | ${formatRelativeTime(focusDecision?.timestamp)}`;
+    }
+}
+
+function decisionToneClass(decision) {
+    const normalized = String(decision || "").toUpperCase();
+    if (normalized === "BUY") {
+        return "buy";
+    }
+    if (normalized === "SELL") {
+        return "sell";
+    }
+    if (normalized === "HOLD") {
+        return "hold";
+    }
+    return "neutral";
+}
+
+function formatRelativeTime(timestamp) {
+    if (!timestamp) {
+        return "-";
+    }
+    const value = new Date(timestamp);
+    if (Number.isNaN(value.getTime())) {
+        return "-";
+    }
+    const deltaSeconds = Math.max(0, Math.floor((Date.now() - value.getTime()) / 1000));
+    if (deltaSeconds < 5) {
+        return "teraz";
+    }
+    if (deltaSeconds < 60) {
+        return `${deltaSeconds}s temu`;
+    }
+    const minutes = Math.floor(deltaSeconds / 60);
+    if (minutes < 60) {
+        return `${minutes} min temu`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return `${hours} h temu`;
+}
+
+function formatElapsedTime(timestamp) {
+    if (!timestamp) {
+        return "-";
+    }
+    const value = new Date(timestamp);
+    if (Number.isNaN(value.getTime())) {
+        return "-";
+    }
+    const deltaSeconds = Math.max(0, Math.floor((Date.now() - value.getTime()) / 1000));
+    if (deltaSeconds < 5) {
+        return "kilka sekund";
+    }
+    if (deltaSeconds < 60) {
+        return `${deltaSeconds}s`;
+    }
+    const minutes = Math.floor(deltaSeconds / 60);
+    if (minutes < 60) {
+        return `${minutes} min`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return `${hours} h`;
+}
+
+function formatNextCycle(scheduler) {
+    if (!scheduler?.active || !scheduler?.interval_seconds) {
+        return "-";
+    }
+    if (scheduler?.is_running) {
+        return "po tym przebiegu";
+    }
+    const anchor = scheduler.last_run_completed_at || scheduler.last_run_started_at;
+    if (!anchor) {
+        return "trwa inicjalizacja";
+    }
+    const anchorTime = new Date(anchor);
+    if (Number.isNaN(anchorTime.getTime())) {
+        return "-";
+    }
+    const nextRunMs = anchorTime.getTime() + Number(scheduler.interval_seconds) * 1000;
+    const deltaSeconds = Math.ceil((nextRunMs - Date.now()) / 1000);
+    if (deltaSeconds <= 0) {
+        return "teraz";
+    }
+    if (deltaSeconds < 60) {
+        return `za ${deltaSeconds}s`;
+    }
+    const minutes = Math.ceil(deltaSeconds / 60);
+    return `za ${minutes} min`;
+}
+
+function paintAgentMode(systemStatus, config) {
+    const container = document.getElementById("agent-mode-switcher");
+    const description = document.getElementById("agent-mode-description");
+    const profiles = config?.agent_mode_profiles || {};
+    const activeMode = systemStatus?.agent_mode || "normal";
+
+    container.innerHTML = Object.entries(profiles).map(([mode, profile]) => `
+        <button class="switcher-button ${mode === activeMode ? "active" : ""}" data-mode="${mode}">${profile.label}</button>
+    `).join("");
+
+    container.querySelectorAll(".switcher-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+            await switchAgentMode(button.dataset.mode);
+        });
+    });
+
+    const profile = profiles[activeMode] || profiles.normal;
+    description.innerHTML = profile ? `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>${profile.label}</span>
+                <span class="badge neutral">AKTYWNY</span>
+            </div>
+            <div class="stack-item-meta">
+                ${profile.description}<br>
+                Limit wejsc dziennie: ${systemStatus.max_trades_per_day}<br>
+                Max otwartych pozycji: ${systemStatus.max_open_positions}<br>
+                Exploration: ${percentFormatter.format((systemStatus.exploration_rate || 0) * 100)}%
+            </div>
+        </div>
+    ` : "";
+}
+
+function paintCapitalSummary(wallet) {
+    const container = document.getElementById("capital-summary");
+    const displayStartPln = dashboardState?.config?.start_balance_display_pln || 1000;
+    container.innerHTML = `
+        ${buildQuickCard("Start", formatQuote(wallet.starting_balance), `Kapital poczatkowy agenta. Reset przywraca bazowe ${percentFormatter.format(displayStartPln)} PLN.`)}
+        ${buildQuickCard("Wydal na zakupy", formatQuote(wallet.spent_on_buys), "Laczna wartosc wejsc BUY")}
+        ${buildQuickCard("Wrocilo ze sprzedazy", formatQuote(wallet.capital_returned), "Kapital odzyskany po SELL")}
+        ${buildQuickCard("Fee lacznie", formatQuote(wallet.fees_paid), "Prowizje kupna i sprzedazy")}
+        ${buildQuickCard("Zostalo gotowki", formatQuote(wallet.cash_balance), "To moze jeszcze wydac agent")}
+        ${buildQuickCard("Zablokowane", formatQuote(wallet.capital_locked_cost), "Kapital siedzi w otwartych pozycjach")}
+    `;
+}
+
+function paintApiUsage(apiUsage) {
+    const container = document.getElementById("api-usage-summary");
+    if (!apiUsage) {
+        container.innerHTML = `<div class="empty-state">Brak danych o zuzyciu API.</div>`;
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>OpenAI</span>
+                <span class="badge neutral">TOKENY</span>
+            </div>
+            <div class="stack-item-meta">
+                Wywolania: ${apiUsage.calls}<br>
+                Input tokens: ${compactNumber(apiUsage.input_tokens)}<br>
+                Output tokens: ${compactNumber(apiUsage.output_tokens)}<br>
+                Wszystkie tokeny: ${compactNumber(apiUsage.total_tokens)}<br>
+                Szacunkowy koszt: ${formatQuote(apiUsage.estimated_cost_usd, "USD")}
+            </div>
+        </div>
+    `;
+}
+
+function paintQuickSummary(wallet) {
+    const container = document.getElementById("quick-summary");
+    const lastClosed = wallet.last_closed_trade;
+    container.innerHTML = `
+        ${buildQuickCard("Co kupil", `${wallet.buy_count} wejsc`, "Kazde BUY otwiera pozycje na wirtualnym kapitalie.")}
+        ${buildQuickCard("Co sprzedal", `${wallet.sell_count} wyjsc`, "SELL zamyka pozycje i zapisuje wynik.")}
+        ${buildQuickCard("Zysk symulowany", formatQuote(wallet.gross_profit), `${wallet.winning_trades_count} zyskownych transakcji paper trading`) }
+        ${buildQuickCard("Strata symulowana", formatQuote(wallet.gross_loss), `${wallet.losing_trades_count} stratnych transakcji paper trading`) }
+        ${buildQuickCard("Bilans symulowany", formatQuote(wallet.realized_profit), `Niezrealizowane paper PnL: ${formatQuote(wallet.unrealized_profit)}`) }
+        ${buildQuickCard("Ostatni wynik symulowany", lastClosed ? `${lastClosed.symbol} ${formatQuote(lastClosed.profit)}` : "Brak", lastClosed ? new Date(lastClosed.closed_at).toLocaleString("pl-PL") : "Czeka na pierwsze zamkniecie") }
+    `;
+}
+
+function paintBoughtCoins(positions) {
+    const container = document.getElementById("bought-coins-menu");
+    if (!positions.length) {
+        container.innerHTML = `<div class="empty-state">Agent nie trzyma teraz zadnego coina.</div>`;
+        return;
+    }
+
+    container.innerHTML = positions.map((position) => {
+        const pnlClass = position.pnl_value >= 0 ? "positive" : "negative";
+        return `
+            <div class="coin-menu-item">
+                <div class="coin-menu-top">
+                    <strong>${position.symbol}</strong>
+                    <span class="badge buy">KUPIONE</span>
+                </div>
+                <div class="coin-menu-meta">
+                    Ilosc: ${numberFormatter.format(position.quantity)}
+                </div>
+                <div class="coin-menu-meta">
+                    Wejscie: ${formatQuote(position.buy_price)}
+                </div>
+                <div class="coin-menu-meta">
+                    Teraz: ${formatQuote(position.current_price)}
+                </div>
+                <div class="coin-menu-meta ${pnlClass}">
+                    PnL: ${formatQuote(position.pnl_value)}
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+function paintTradeBuckets(trades) {
+    const profitContainer = document.getElementById("profit-trades-list");
+    const lossContainer = document.getElementById("loss-trades-list");
+    const closedTrades = (trades || []).filter((trade) => trade.status === "CLOSED" && trade.profit !== null);
+    const profitableTrades = closedTrades.filter((trade) => trade.profit >= 0);
+    const losingTrades = closedTrades.filter((trade) => trade.profit < 0);
+
+    profitContainer.innerHTML = profitableTrades.length
+        ? profitableTrades.map((trade) => buildTradeBucketItem(trade, true)).join("")
+        : `<div class="empty-state">Brak sprzedanych coinow z zyskiem.</div>`;
+
+    lossContainer.innerHTML = losingTrades.length
+        ? losingTrades.map((trade) => buildTradeBucketItem(trade, false)).join("")
+        : `<div class="empty-state">Brak sprzedanych coinow ze strata.</div>`;
+}
+
+function paintMarket(rows) {
+    const table = document.getElementById("market-table");
+    const visibleRows = filterRowsBySector(rows);
+    if (!visibleRows.length) {
+        table.innerHTML = `<tr><td colspan="12">Brak danych rynkowych dla wybranego sektora.</td></tr>`;
+        return;
+    }
+
+    table.innerHTML = visibleRows.map((row) => `
+        <tr class="market-row ${row.symbol === selectedSymbol ? "active" : ""}" data-symbol="${row.symbol}">
+            <td>${row.symbol}</td>
+            <td>${formatQuote(row.price)}</td>
+            <td class="${toneClass(row.change_24h)}">${formatSignedPercent(row.change_24h)}</td>
+            <td>${percentFormatter.format(row.rsi)}</td>
+            <td>${percentFormatter.format(row.macd)}</td>
+            <td>${row.trend}</td>
+            <td>${percentFormatter.format(row.volume_change)}%</td>
+            <td>${percentFormatter.format(row.up_probability)}%</td>
+            <td>${percentFormatter.format(row.bottom_probability)}%</td>
+            <td>${percentFormatter.format(row.top_probability)}%</td>
+            <td><span class="badge ${signalBadgeClass(row.reversal_signal)}">${row.reversal_signal}</span></td>
+            <td><span class="badge ${row.decision.toLowerCase()}">${row.decision}</span></td>
+        </tr>
+    `).join("");
+
+    table.querySelectorAll(".market-row").forEach((row) => {
+        row.addEventListener("click", async () => {
+            await setSelectedSymbol(row.dataset.symbol);
+        });
+    });
+}
+
+function filterRowsBySector(rows) {
+    if (selectedSector === "ALL") {
+        return rows;
+    }
+    const sectorSymbols = dashboardState?.config?.symbol_groups?.[selectedSector] || [];
+    return rows.filter((row) => sectorSymbols.includes(row.symbol));
+}
+
+function paintSectorFilters(config) {
+    const container = document.getElementById("market-sector-filter");
+    const groups = config?.symbol_groups || {};
+    const options = [{ id: "ALL", label: "Wszystkie" }, ...Object.keys(groups).map((group) => ({ id: group, label: group }))];
+    container.innerHTML = options.map((option) => `
+        <button class="switcher-button ${option.id === selectedSector ? "active" : ""}" data-sector="${option.id}">${option.label}</button>
+    `).join("");
+
+    container.querySelectorAll(".switcher-button").forEach((button) => {
+        button.addEventListener("click", () => {
+            selectedSector = button.dataset.sector;
+            paintSectorFilters(config);
+            paintMarket(dashboardState.market);
+        });
+    });
+}
+
+function paintPositions(positions) {
+    const container = document.getElementById("positions-list");
+    if (!positions.length) {
+        container.innerHTML = `<div class="stack-item"><div class="stack-item-meta">Brak otwartych pozycji.</div></div>`;
+        return;
+    }
+
+    container.innerHTML = positions.map((position) => {
+        const pnlClass = position.pnl_value >= 0 ? "positive" : "negative";
+        return `
+            <div class="stack-item">
+                <div class="stack-item-title">
+                    <span>${position.symbol}</span>
+                    <span class="${pnlClass}">${percentFormatter.format(position.pnl_pct)}%</span>
+                </div>
+                <div class="stack-item-meta">
+                    Ilosc: ${position.quantity}<br>
+                    Buy: ${formatQuote(position.buy_price)}<br>
+                    Aktualnie: ${formatQuote(position.current_price)}<br>
+                    Wycena: ${formatQuote(position.value)}<br>
+                    PnL: <span class="${pnlClass}">${formatQuote(position.pnl_value)}</span>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+function paintDecisions(decisions) {
+    const container = document.getElementById("decision-list");
+    if (!decisions.length) {
+        container.innerHTML = `<div class="stack-item"><div class="stack-item-meta">Brak decyzji.</div></div>`;
+        return;
+    }
+
+    container.innerHTML = decisions.map((decision) => `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>${decision.symbol}</span>
+                <span class="badge ${decision.decision.toLowerCase()}">${decision.decision}</span>
+            </div>
+            <div class="stack-item-meta">
+                Pewnosc: ${percentFormatter.format(decision.confidence)}%<br>
+                ${decision.reason}<br>
+                ${new Date(decision.timestamp).toLocaleString("pl-PL")}
+            </div>
+        </div>
+    `).join("");
+}
+
+function paintTrades(trades) {
+    const container = document.getElementById("trade-list");
+    if (!trades.length) {
+        container.innerHTML = `<div class="stack-item"><div class="stack-item-meta">Brak transakcji.</div></div>`;
+        return;
+    }
+
+    container.innerHTML = trades.map((trade) => {
+        const profitClass = (trade.profit || 0) >= 0 ? "positive" : "negative";
+        const tradeBadge = trade.status === "OPEN" ? "buy" : (trade.profit || 0) >= 0 ? "buy" : "sell";
+        const tradeLabel = trade.status === "OPEN" ? "KUPIONE" : "SPRZEDANE";
+        const profitValue = trade.profit === null ? "W toku" : `<span class="${profitClass}">${formatQuote(trade.profit)}</span>`;
+        return `
+            <div class="stack-item">
+                <div class="stack-item-title">
+                    <span>${trade.symbol}</span>
+                    <span class="badge ${tradeBadge}">${tradeLabel}</span>
+                </div>
+                <div class="stack-item-meta">
+                    Ilosc: ${numberFormatter.format(trade.quantity)}<br>
+                    Kupno: ${formatQuote(trade.buy_price)} | wartosc ${formatQuote(trade.buy_value)} | fee ${formatQuote(trade.buy_fee)}<br>
+                    Sprzedaz: ${trade.sell_price === null ? "-" : `${formatQuote(trade.sell_price)} | wartosc ${formatQuote(trade.sell_value)} | fee ${formatQuote(trade.sell_fee)}`}<br>
+                    Wynik: ${profitValue}<br>
+                    Otwarcie: ${new Date(trade.opened_at).toLocaleString("pl-PL")}<br>
+                    Zamkniecie: ${trade.closed_at ? new Date(trade.closed_at).toLocaleString("pl-PL") : "pozycja nadal otwarta"}
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+function setStatus(message) {
+    document.getElementById("status-line").textContent = message;
+}
+
+async function setSelectedSymbol(symbol) {
+    selectedSymbol = symbol;
+    if (!dashboardState) {
+        return;
+    }
+    paintMarket(dashboardState.market);
+    paintChartSelector();
+    updateAgentPulseStrip();
+    await renderSelectedChart();
+}
+
+function paintChartSelector() {
+    const container = document.getElementById("chart-switcher");
+    const symbols = (dashboardState?.market || []).map((row) => row.symbol);
+    if (!symbols.length) {
+        container.innerHTML = `<div class="empty-state">Brak wykresow.</div>`;
+        return;
+    }
+
+    container.innerHTML = symbols.map((symbol) => `
+        <button class="switcher-button ${symbol === selectedSymbol ? "active" : ""}" data-symbol="${symbol}">${symbol}</button>
+    `).join("");
+
+    container.querySelectorAll(".switcher-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+            await setSelectedSymbol(button.dataset.symbol);
+        });
+    });
+}
+
+function paintChartTabs() {
+    const container = document.getElementById("chart-tabs");
+    container.innerHTML = chartTabs.map((tab) => `
+        <button class="switcher-button ${tab.id === selectedChartTab ? "active" : ""}" data-tab="${tab.id}">${tab.label}</button>
+    `).join("");
+
+    container.querySelectorAll(".switcher-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+            selectedChartTab = button.dataset.tab;
+            paintChartTabs();
+            await renderSelectedChart();
+        });
+    });
+}
+
+function paintChartRangeSwitcher() {
+    const container = document.getElementById("chart-range-switcher");
+    container.innerHTML = historyModes.map((mode) => `
+        <button class="switcher-button ${mode.id === selectedHistoryMode ? "active" : ""}" data-range="${mode.id}">${mode.label}</button>
+    `).join("");
+
+    container.querySelectorAll(".switcher-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+            selectedHistoryMode = button.dataset.range;
+            paintChartRangeSwitcher();
+            paintLifecycleIntervalSwitcher();
+            await renderSelectedChart();
+        });
+    });
+}
+
+function paintLifecycleIntervalSwitcher() {
+    const container = document.getElementById("chart-interval-switcher");
+    if (selectedHistoryMode !== "max") {
+        container.innerHTML = "";
+        return;
+    }
+
+    container.innerHTML = lifecycleIntervals.map((interval) => `
+        <button class="switcher-button ${interval.id === selectedLifecycleInterval ? "active" : ""}" data-interval="${interval.id}">${interval.label}</button>
+    `).join("");
+
+    container.querySelectorAll(".switcher-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+            selectedLifecycleInterval = button.dataset.interval;
+            paintLifecycleIntervalSwitcher();
+            await renderSelectedChart();
+        });
+    });
+}
+
+async function renderSelectedChart() {
+    if (!selectedSymbol) {
+        paintChart(null, null);
+        return;
+    }
+    const chartPackage = await fetchChartPackage(selectedSymbol);
+    if (selectedHistoryMode === "max" && selectedSymbol) {
+        const lifecycleHistory = await fetchLongHistory(selectedSymbol);
+        paintChart(chartPackage, lifecycleHistory);
+        return;
+    }
+    paintChart(chartPackage, null);
+}
+
+async function fetchChartPackage(symbol) {
+    if (chartPackageCache[symbol]) {
+        return chartPackageCache[symbol];
+    }
+    const response = await fetch(`/api/chart-package?symbol=${encodeURIComponent(symbol)}`);
+    if (!response.ok) {
+        throw new Error(`Nie udalo sie pobrac wykresu ${symbol}.`);
+    }
+    const payload = await response.json();
+    chartPackageCache[symbol] = payload;
+    return payload;
+}
+
+async function fetchLongHistory(symbol) {
+    if (chartHistoryCache[symbol]) {
+        return chartHistoryCache[symbol];
+    }
+    const response = await fetch(`/api/chart-history?symbol=${encodeURIComponent(symbol)}`);
+    if (!response.ok) {
+        throw new Error(`Nie udalo sie pobrac historii ${symbol}.`);
+    }
+    const payload = await response.json();
+    chartHistoryCache[symbol] = payload;
+    return payload;
+}
+
+function paintChart(chartPackage, lifecycleHistory) {
+    const chart = document.getElementById("price-chart");
+    const summary = document.getElementById("chart-summary");
+    const insights = document.getElementById("chart-insights");
+
+    if (selectedHistoryMode === "max") {
+        paintLifecycleChart(chart, summary, insights, lifecycleHistory, chartPackage);
+        return;
+    }
+
+    if (!chartPackage || !chartPackage.points?.length) {
+        chart.innerHTML = "";
+        summary.innerHTML = `<div class="empty-state">Brak danych do analizy wykresu.</div>`;
+        insights.innerHTML = "";
+        setChartHoverState(null);
+        return;
+    }
+
+    if (selectedChartTab === "price") {
+        paintPriceTab(chart, summary, insights, chartPackage);
+        return;
+    }
+    if (selectedChartTab === "volume") {
+        paintVolumeTab(chart, summary, insights, chartPackage);
+        return;
+    }
+    if (selectedChartTab === "rsi") {
+        paintRsiTab(chart, summary, insights, chartPackage);
+        return;
+    }
+    if (selectedChartTab === "macd") {
+        paintMacdTab(chart, summary, insights, chartPackage);
+        return;
+    }
+
+    const width = 920;
+    const height = 560;
+    const paddingX = 44;
+    const series = chartPackage.points.slice(-60);
+    const panels = {
+        price: { top: 38, height: 250 },
+        volume: { top: 314, height: 76 },
+        rsi: { top: 420, height: 58 },
+        macd: { top: 500, height: 48 },
+    };
+    const priceValues = series.flatMap((point) => [point.low, point.high, point.ema20, point.ema50]);
+    const priceMin = Math.min(...priceValues, chartPackage.summary.support);
+    const priceMax = Math.max(...priceValues, chartPackage.summary.resistance);
+    const volumeMax = Math.max(...series.map((point) => point.volume), 1);
+    const rsiMin = 0;
+    const rsiMax = 100;
+    const macdValues = series.flatMap((point) => [point.macd, point.macd_signal, point.macd_hist, 0]);
+    const macdMin = Math.min(...macdValues);
+    const macdMax = Math.max(...macdValues);
+    const ema20Path = buildPanelLinePath(series, (point) => point.ema20, priceMin, priceMax, width, panels.price, paddingX);
+    const ema50Path = buildPanelLinePath(series, (point) => point.ema50, priceMin, priceMax, width, panels.price, paddingX);
+    const rsiPath = buildPanelLinePath(series, (point) => point.rsi, rsiMin, rsiMax, width, panels.rsi, paddingX);
+    const macdPath = buildPanelLinePath(series, (point) => point.macd, macdMin, macdMax, width, panels.macd, paddingX);
+    const macdSignalPath = buildPanelLinePath(series, (point) => point.macd_signal, macdMin, macdMax, width, panels.macd, paddingX);
+    const latest = series[series.length - 1];
+    const firstDate = series[0].date;
+    const lastDate = latest.date;
+
+    chart.innerHTML = `
+        ${buildMultiPanelGrid(width, panels, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#4fd1a6", priceMin, priceMax, width, panels.price, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ff7e6b", priceMin, priceMax, width, panels.price, paddingX)}
+        ${buildCandles(series, priceMin, priceMax, width, panels.price, paddingX)}
+        <path d="${ema20Path}" fill="none" stroke="#4fd1a6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${ema50Path}" fill="none" stroke="#8db9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        ${buildVolumeBars(series, volumeMax, width, panels.volume, paddingX)}
+        ${buildRsiGuides(width, panels.rsi, paddingX)}
+        <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+        ${buildMacdHistogram(series, macdMin, macdMax, width, panels.macd, paddingX)}
+        ${buildMacdZeroLine(macdMin, macdMax, width, panels.macd, paddingX)}
+        <path d="${macdPath}" fill="none" stroke="#4fd1a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${macdSignalPath}" fill="none" stroke="#ffb347" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+        ${buildPanelLabels(width, panels, paddingX, chartPackage, latest, volumeMax)}
+        ${buildChartLegend(width, paddingX)}
+        <text x="${paddingX}" y="24" fill="#93b7ac" font-size="12">${chartPackage.symbol} | ${firstDate} - ${lastDate} | source ${chartPackage.summary.source}</text>
+        <text x="${width - paddingX}" y="24" fill="#eaf5f0" font-size="12" text-anchor="end">${formatQuote(latest.close)}</text>
+    `;
+    setChartHoverState(buildIndexChartHoverState({
+        points: series,
+        width,
+        paddingX,
+        pricePanel: panels.price,
+        priceMin,
+        priceMax,
+        overlayTop: panels.price.top,
+        overlayBottom: panels.macd.top + panels.macd.height,
+        symbol: chartPackage.symbol,
+        source: chartPackage.summary.source,
+    }));
+
+    summary.innerHTML = `
+        ${buildSummaryCard("7 dni", `${formatSignedPercent(chartPackage.summary.change_7d)}`, toneClass(chartPackage.summary.change_7d))}
+        ${buildSummaryCard("30 dni", `${formatSignedPercent(chartPackage.summary.change_30d)}`, toneClass(chartPackage.summary.change_30d))}
+        ${buildSummaryCard("24h", `${formatSignedPercent(chartPackage.summary.change_24h)}`, toneClass(chartPackage.summary.change_24h))}
+        ${buildSummaryCard("Zmiennosc 14d", `${percentFormatter.format(chartPackage.summary.volatility_14d)}%`, "")}
+        ${buildSummaryCard("Wsparcie", formatQuote(chartPackage.summary.support), "")}
+        ${buildSummaryCard("Opor", formatQuote(chartPackage.summary.resistance), "")}
+        ${buildSummaryCard("EMA20", formatQuote(chartPackage.summary.ema20), "")}
+        ${buildSummaryCard("EMA50", formatQuote(chartPackage.summary.ema50), "")}
+        ${buildSummaryCard("RSI", `${percentFormatter.format(chartPackage.summary.rsi)}`, toneClass(50 - chartPackage.summary.rsi))}
+        ${buildSummaryCard("MACD", `${percentFormatter.format(chartPackage.summary.macd)}`, toneClass(chartPackage.summary.macd - chartPackage.summary.macd_signal))}
+        ${buildSummaryCard("P up", `${percentFormatter.format(chartPackage.summary.up_probability)}%`, toneClass(chartPackage.summary.up_probability - 50))}
+        ${buildSummaryCard("P dolek", `${percentFormatter.format(chartPackage.summary.bottom_probability)}%`, toneClass(chartPackage.summary.bottom_probability - 50))}
+        ${buildSummaryCard("P szczyt", `${percentFormatter.format(chartPackage.summary.top_probability)}%`, toneClass(50 - chartPackage.summary.top_probability))}
+        ${buildSummaryCard("Sygnał", chartPackage.summary.signal_alignment.toUpperCase(), chartPackage.summary.signal_alignment === "bullish" ? "positive" : chartPackage.summary.signal_alignment === "bearish" ? "negative" : "")}
+    `;
+
+    const allInsights = [...chartPackage.insights, ...(chartPackage.summary.probability_explanation || [])];
+    insights.innerHTML = allInsights.map((item) => `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>${chartPackage.symbol}</span>
+                <span class="badge hold">WYKRES</span>
+            </div>
+            <div class="stack-item-meta">${item}</div>
+        </div>
+    `).join("");
+}
+
+function paintPriceTab(chart, summary, insights, chartPackage) {
+    const width = 920;
+    const height = 560;
+    const paddingX = 44;
+    const panel = { top: 56, height: 430 };
+    const series = chartPackage.points.slice(-120);
+    const minValue = Math.min(...series.map((point) => point.low), chartPackage.summary.support);
+    const maxValue = Math.max(...series.map((point) => point.high), chartPackage.summary.resistance);
+    const ema20Path = buildPanelLinePath(series, (point) => point.ema20, minValue, maxValue, width, panel, paddingX);
+    const ema50Path = buildPanelLinePath(series, (point) => point.ema50, minValue, maxValue, width, panel, paddingX);
+    const latest = series[series.length - 1];
+    chart.innerHTML = `
+        ${buildSinglePanelGrid(width, panel, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#4fd1a6", minValue, maxValue, width, panel, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ff7e6b", minValue, maxValue, width, panel, paddingX)}
+        ${buildCandles(series, minValue, maxValue, width, panel, paddingX)}
+        <path d="${ema20Path}" fill="none" stroke="#4fd1a6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${ema50Path}" fill="none" stroke="#8db9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka cena | ostatnie ${series.length} swiec</text>
+        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">${formatQuote(latest.close)}</text>
+        ${buildChartLegend(width, paddingX)}
+    `;
+    setChartHoverState(buildIndexChartHoverState({
+        points: series,
+        width,
+        paddingX,
+        pricePanel: panel,
+        priceMin: minValue,
+        priceMax: maxValue,
+        overlayTop: panel.top,
+        overlayBottom: panel.top + panel.height,
+        symbol: chartPackage.symbol,
+        source: chartPackage.summary.source,
+    }));
+    summary.innerHTML = `
+        ${buildSummaryCard("Cena", formatQuote(chartPackage.summary.current_price), "")}
+        ${buildSummaryCard("Wsparcie", formatQuote(chartPackage.summary.support), "")}
+        ${buildSummaryCard("Opor", formatQuote(chartPackage.summary.resistance), "")}
+        ${buildSummaryCard("EMA20", formatQuote(chartPackage.summary.ema20), "")}
+        ${buildSummaryCard("EMA50", formatQuote(chartPackage.summary.ema50), "")}
+    `;
+    insights.innerHTML = `
+        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">CENA</span></div><div class="stack-item-meta">Tu agent widzi swiece, srednie EMA oraz reakcje na wsparciu i oporze. To jest glowny widok do nauki price action.</div></div>
+    `;
+}
+
+function paintVolumeTab(chart, summary, insights, chartPackage) {
+    const width = 920;
+    const height = 560;
+    const paddingX = 44;
+    const panel = { top: 56, height: 430 };
+    const series = chartPackage.points.slice(-120);
+    const volumeMax = Math.max(...series.map((point) => point.volume), 1);
+    chart.innerHTML = `
+        ${buildSinglePanelGrid(width, panel, paddingX)}
+        ${buildVolumeBars(series, volumeMax, width, panel, paddingX)}
+        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka wolumen</text>
+        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">max ${compactNumber(volumeMax)}</text>
+    `;
+    setChartHoverState(null);
+    summary.innerHTML = `
+        ${buildSummaryCard("Zmiana wolumenu", `${formatSignedPercent(chartPackage.summary.volume_change)}`, toneClass(chartPackage.summary.volume_change))}
+        ${buildSummaryCard("Trend", chartPackage.summary.trend, chartPackage.summary.trend === "UP" ? "positive" : chartPackage.summary.trend === "DOWN" ? "negative" : "")}
+    `;
+    insights.innerHTML = `
+        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">WOLUMEN</span></div><div class="stack-item-meta">Ten widok pokazuje, czy ruch ceny ma uczestnictwo rynku. Agent powinien uczyc sie odrozniania wybicia z kapitalem od pustego szarpniecia.</div></div>
+    `;
+}
+
+function paintRsiTab(chart, summary, insights, chartPackage) {
+    const width = 920;
+    const height = 560;
+    const paddingX = 44;
+    const panel = { top: 56, height: 430 };
+    const series = chartPackage.points.slice(-120);
+    const rsiPath = buildPanelLinePath(series, (point) => point.rsi, 0, 100, width, panel, paddingX);
+    chart.innerHTML = `
+        ${buildSinglePanelGrid(width, panel, paddingX)}
+        ${buildRsiGuides(width, panel, paddingX)}
+        <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka RSI</text>
+        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
+    `;
+    setChartHoverState(null);
+    summary.innerHTML = `
+        ${buildSummaryCard("RSI", `${percentFormatter.format(chartPackage.summary.rsi)}`, toneClass(50 - chartPackage.summary.rsi))}
+        ${buildSummaryCard("Strefa", chartPackage.summary.rsi_zone.toUpperCase(), chartPackage.summary.rsi_zone === "oversold" ? "positive" : chartPackage.summary.rsi_zone === "overbought" ? "negative" : "")}
+        ${buildSummaryCard("P dolek", `${percentFormatter.format(chartPackage.summary.bottom_probability)}%`, toneClass(chartPackage.summary.bottom_probability - 50))}
+        ${buildSummaryCard("P szczyt", `${percentFormatter.format(chartPackage.summary.top_probability)}%`, toneClass(50 - chartPackage.summary.top_probability))}
+    `;
+    insights.innerHTML = `
+        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">RSI</span></div><div class="stack-item-meta">RSI ma byc czytane w kontekscie trendu. Oversold nie oznacza automatycznie BUY, a overbought nie oznacza automatycznie SELL.</div></div>
+    `;
+}
+
+function paintMacdTab(chart, summary, insights, chartPackage) {
+    const width = 920;
+    const height = 560;
+    const paddingX = 44;
+    const panel = { top: 56, height: 430 };
+    const series = chartPackage.points.slice(-120);
+    const macdValues = series.flatMap((point) => [point.macd, point.macd_signal, point.macd_hist, 0]);
+    const minValue = Math.min(...macdValues);
+    const maxValue = Math.max(...macdValues);
+    const macdPath = buildPanelLinePath(series, (point) => point.macd, minValue, maxValue, width, panel, paddingX);
+    const macdSignalPath = buildPanelLinePath(series, (point) => point.macd_signal, minValue, maxValue, width, panel, paddingX);
+    chart.innerHTML = `
+        ${buildSinglePanelGrid(width, panel, paddingX)}
+        ${buildMacdZeroLine(minValue, maxValue, width, panel, paddingX)}
+        ${buildMacdHistogram(series, minValue, maxValue, width, panel, paddingX)}
+        <path d="${macdPath}" fill="none" stroke="#4fd1a6" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${macdSignalPath}" fill="none" stroke="#ffb347" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path>
+        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka MACD</text>
+        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">MACD ${percentFormatter.format(chartPackage.summary.macd)}</text>
+        ${buildChartLegend(width, paddingX)}
+    `;
+    setChartHoverState(null);
+    summary.innerHTML = `
+        ${buildSummaryCard("MACD", `${percentFormatter.format(chartPackage.summary.macd)}`, toneClass(chartPackage.summary.macd - chartPackage.summary.macd_signal))}
+        ${buildSummaryCard("Signal", `${percentFormatter.format(chartPackage.summary.macd_signal)}`, "")}
+        ${buildSummaryCard("Stan", chartPackage.summary.macd_state.toUpperCase(), chartPackage.summary.macd_state === "bullish" ? "positive" : "negative")}
+        ${buildSummaryCard("P up", `${percentFormatter.format(chartPackage.summary.up_probability)}%`, toneClass(chartPackage.summary.up_probability - 50))}
+    `;
+    insights.innerHTML = `
+        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">MACD</span></div><div class="stack-item-meta">MACD pokazuje momentum i zmiane reżimu. Agent powinien laczyc crossover z trendem i wolumenem, zamiast handlowac sam sygnal.</div></div>
+    `;
+}
+
+function paintLifecycleChart(chart, summary, insights, lifecycleHistory, chartPackage) {
+    if (!lifecycleHistory?.points?.length) {
+        chart.innerHTML = "";
+        summary.innerHTML = `<div class="empty-state">Brak historii od startu coina.</div>`;
+        insights.innerHTML = "";
+        setChartHoverState(null);
+        return;
+    }
+
+    const width = 920;
+    const paddingX = 44;
+    const panels = {
+        price: { top: 56, height: 322 },
+        volume: { top: 410, height: 76 },
+    };
+    const lifecycleSeries = buildLifecycleCandles(lifecycleHistory.points, 220, selectedLifecycleInterval);
+    const candles = lifecycleSeries.candles;
+    const minValue = Math.min(...candles.map((point) => Math.max(point.low, 0.00000001)), lifecycleHistory.summary.atl_price || Number.MAX_VALUE);
+    const maxValue = Math.max(...candles.map((point) => point.high), lifecycleHistory.summary.ath_price || 0);
+    const volumeMax = Math.max(...candles.map((point) => point.volume || 0), 1);
+    const minTimestamp = Math.min(...candles.map((point) => point.timestampValue));
+    const maxTimestamp = Math.max(...candles.map((point) => point.timestampValue));
+    const athY = projectPanelY(lifecycleHistory.summary.ath_price, minValue, maxValue, panels.price.top, panels.price.height);
+    const currentY = projectPanelY(lifecycleHistory.summary.current_price, minValue, maxValue, panels.price.top, panels.price.height);
+    chart.innerHTML = `
+        ${buildMultiPanelGrid(width, panels, paddingX)}
+        ${buildPriceReferenceLine(lifecycleHistory.summary.ath_price, "ATH", "#ff7e6b", minValue, maxValue, width, panels.price, paddingX)}
+        ${buildLifecycleCandlesSvg(candles, minValue, maxValue, width, panels.price, paddingX, minTimestamp, maxTimestamp)}
+        ${buildLifecycleVolumeBars(candles, volumeMax, width, panels.volume, paddingX, minTimestamp, maxTimestamp)}
+        <line x1="${paddingX}" y1="${athY}" x2="${width - paddingX}" y2="${athY}" stroke="rgba(255,126,107,0.55)" stroke-dasharray="6 4" stroke-width="1"></line>
+        <line x1="${paddingX}" y1="${currentY}" x2="${width - paddingX}" y2="${currentY}" stroke="rgba(79,209,166,0.55)" stroke-dasharray="6 4" stroke-width="1"></line>
+        ${buildLifecycleYearMarkers(candles, width, panels, paddingX, minTimestamp, maxTimestamp)}
+        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${lifecycleHistory.symbol} | cala historia | ${lifecycleHistory.summary.start_date} - ${lifecycleHistory.summary.end_date} | source ${String(lifecycleHistory.summary.history_source).toUpperCase()} | swiece ${lifecycleSeries.intervalLabel}</text>
+        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">${formatQuote(lifecycleHistory.summary.current_price)}</text>
+        <text x="${paddingX}" y="${athY - 8}" fill="#ffb4a8" font-size="10">ATH ${formatQuote(lifecycleHistory.summary.ath_price)} | ${lifecycleHistory.summary.ath_date}</text>
+        <text x="${paddingX}" y="${currentY - 8}" fill="#8ef7d0" font-size="10">NOW ${formatQuote(lifecycleHistory.summary.current_price)}</text>
+        <text x="${width - paddingX}" y="${panels.volume.top - 10}" fill="#93b7ac" font-size="11" text-anchor="end">wolumen max ${compactNumber(volumeMax)}</text>
+        ${buildChartLegend(width, paddingX)}
+    `;
+    setChartHoverState(buildTimeChartHoverState({
+        points: candles,
+        width,
+        paddingX,
+        pricePanel: panels.price,
+        priceMin: minValue,
+        priceMax: maxValue,
+        overlayTop: panels.price.top,
+        overlayBottom: panels.volume.top + panels.volume.height,
+        minTimestamp,
+        maxTimestamp,
+        symbol: lifecycleHistory.symbol,
+        source: lifecycleHistory.summary.history_source,
+    }));
+    summary.innerHTML = `
+        ${buildSummaryCard("Start", formatQuote(lifecycleHistory.summary.inception_price), "")}
+        ${buildSummaryCard("Teraz", formatQuote(lifecycleHistory.summary.current_price), "")}
+        ${buildSummaryCard("ATH", formatQuote(lifecycleHistory.summary.ath_price), "")}
+        ${buildSummaryCard("ATL", formatQuote(lifecycleHistory.summary.atl_price), "")}
+        ${buildSummaryCard("Zmiana od startu", `${formatSignedPercent(lifecycleHistory.summary.change_since_inception)}`, toneClass(lifecycleHistory.summary.change_since_inception))}
+        ${buildSummaryCard("Lata na rynku", `${numberFormatter.format(lifecycleHistory.summary.years_listed)}`, "")}
+        ${buildSummaryCard("Swiece", lifecycleSeries.intervalLabel, "")}
+        ${buildSummaryCard("Punkty historii", compactNumber(lifecycleHistory.summary.points_count || lifecycleHistory.points.length), "")}
+        ${buildSummaryCard("Zrodlo", String(lifecycleHistory.summary.history_source).toUpperCase(), "")}
+    `;
+    insights.innerHTML = `
+        <div class="stack-item"><div class="stack-item-title"><span>${lifecycleHistory.symbol}</span><span class="badge neutral">OD STARTU</span></div><div class="stack-item-meta">To jest pelna historia oparta przede wszystkim o dzienne OHLC z Binance, a na ekran trafia adaptacyjnie zagregowana wersja ${lifecycleSeries.intervalLabel}, zeby wykres wygladal i czytal sie bardziej jak na Binance.</div></div>
+        ${chartPackage ? `<div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge hold">TRYB</span></div><div class="stack-item-meta">Widok "Od startu" pokazuje caly cykl zycia aktywa wraz z wolumenem. Zakladki RSI, MACD i wolumenu nadal sluza do nauki krotszego horyzontu.</div></div>` : ""}
+    `;
+}
+
+function buildLifecycleCandles(points, maxCandles, forcedInterval = "auto") {
+    const normalized = (points || []).map((point) => ({
+        date: point.date,
+        timestamp: point.timestamp || point.date,
+        timestampValue: Date.parse(point.timestamp || point.date),
+        open: Number(point.open ?? point.close),
+        high: Number(point.high ?? Math.max(point.open ?? point.close, point.close)),
+        low: Number(point.low ?? Math.min(point.open ?? point.close, point.close)),
+        close: Number(point.close),
+        volume: Number(point.volume || 0),
+    })).sort((left, right) => left.timestampValue - right.timestampValue);
+
+    if (!normalized.length) {
+        return { candles: [], intervalLabel: "-" };
+    }
+
+    const bucketDays = forcedInterval === "auto" ? resolveLifecycleBucketDays(normalized, maxCandles) : resolveForcedLifecycleBucketDays(forcedInterval);
+    const bucketMs = bucketDays * 24 * 60 * 60 * 1000;
+    const startTimestamp = normalized[0].timestampValue;
+    const grouped = [];
+
+    normalized.forEach((point) => {
+        const bucketIndex = Math.floor((point.timestampValue - startTimestamp) / bucketMs);
+        const existing = grouped[grouped.length - 1];
+        if (!existing || existing.bucketIndex !== bucketIndex) {
+            grouped.push({
+                bucketIndex,
+                date: point.date,
+                timestamp: point.timestamp,
+                timestampValue: point.timestampValue,
+                open: point.open,
+                high: point.high,
+                low: point.low,
+                close: point.close,
+                volume: point.volume,
+            });
+            return;
+        }
+        existing.high = Math.max(existing.high, point.high, point.close);
+        existing.low = Math.min(existing.low, point.low, point.close);
+        existing.close = point.close;
+        existing.volume += point.volume;
+    });
+
+    const candles = forcedInterval === "auto" && grouped.length > maxCandles ? compressLifecycleCandles(grouped, maxCandles) : grouped;
+    return {
+        candles,
+        intervalLabel: formatLifecycleIntervalLabel(bucketDays),
+    };
+}
+
+function buildLifecycleCandlesSvg(candles, minValue, maxValue, width, panel, paddingX, minTimestamp, maxTimestamp) {
+    return candles.map((point, index) => {
+        const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
+        const nextPoint = candles[Math.min(index + 1, candles.length - 1)];
+        const nextX = projectTimeX(nextPoint.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
+        const bodyWidth = Math.max(0.8, Math.min(8, Math.abs(nextX - x) * 0.72 || 4));
+        const openY = projectPanelY(point.open, minValue, maxValue, panel.top, panel.height);
+        const closeY = projectPanelY(point.close, minValue, maxValue, panel.top, panel.height);
+        const highY = projectPanelY(point.high, minValue, maxValue, panel.top, panel.height);
+        const lowY = projectPanelY(point.low, minValue, maxValue, panel.top, panel.height);
+        const isUp = point.close >= point.open;
+        const color = isUp ? "#4fd1a6" : "#ff7e6b";
+        const bodyY = Math.min(openY, closeY);
+        const bodyHeight = Math.max(1.2, Math.abs(closeY - openY));
+        return `
+            <line x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}" stroke="${color}" stroke-width="1.1"></line>
+            <rect x="${x - bodyWidth / 2}" y="${bodyY}" width="${bodyWidth}" height="${bodyHeight}" fill="${color}" opacity="0.88" rx="1.2"></rect>
+        `;
+    }).join("");
+}
+
+function buildLifecycleVolumeBars(points, volumeMax, width, panel, paddingX, minTimestamp, maxTimestamp) {
+    return points.map((point, index) => {
+        const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
+        const nextPoint = points[Math.min(index + 1, points.length - 1)];
+        const nextX = projectTimeX(nextPoint.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
+        const barWidth = Math.max(0.8, Math.min(8, Math.abs(nextX - x) * 0.72 || 4));
+        const y = projectPanelY(point.volume || 0, 0, volumeMax, panel.top, panel.height);
+        const height = Math.max(1.5, panel.top + panel.height - y);
+        const color = point.close >= point.open ? "rgba(79,209,166,0.7)" : "rgba(255,126,107,0.72)";
+        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${height}" fill="${color}" rx="1"></rect>`;
+    }).join("");
+}
+
+function buildLifecycleYearMarkers(points, width, panels, paddingX, minTimestamp, maxTimestamp) {
+    const markers = [];
+    const seenYears = new Set();
+    points.forEach((point, index) => {
+        const year = point.date.slice(0, 4);
+        if (seenYears.has(year)) {
+            return;
+        }
+        if (!point.date.endsWith("-01-01") && index !== 0) {
+            return;
+        }
+        seenYears.add(year);
+        const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
+        markers.push(`
+            <line x1="${x}" y1="${panels.price.top}" x2="${x}" y2="${panels.volume.top + panels.volume.height}" stroke="rgba(255,255,255,0.05)" stroke-dasharray="3 6" stroke-width="1"></line>
+            <text x="${x}" y="${panels.volume.top + panels.volume.height + 18}" fill="#93b7ac" font-size="10" text-anchor="middle">${year}</text>
+        `);
+    });
+    return markers.join("");
+}
+
+function resolveLifecycleBucketDays(points, maxCandles) {
+    if (points.length <= maxCandles) {
+        return 1;
+    }
+    const firstTimestamp = points[0].timestampValue;
+    const lastTimestamp = points[points.length - 1].timestampValue;
+    const totalDays = Math.max(1, Math.round((lastTimestamp - firstTimestamp) / 86400000) + 1);
+    const targetBucketDays = Math.ceil(totalDays / maxCandles);
+    const supportedBuckets = [1, 3, 7, 14, 30, 60, 90, 180];
+    return supportedBuckets.find((value) => targetBucketDays <= value) || supportedBuckets[supportedBuckets.length - 1];
+}
+
+function resolveForcedLifecycleBucketDays(intervalId) {
+    const mapping = {
+        "1d": 1,
+        "1w": 7,
+        "1m": 30,
+    };
+    return mapping[intervalId] || 1;
+}
+
+function formatLifecycleIntervalLabel(bucketDays) {
+    if (bucketDays === 1) {
+        return "1D";
+    }
+    if (bucketDays === 7) {
+        return "1W";
+    }
+    if (bucketDays === 14) {
+        return "2W";
+    }
+    if (bucketDays === 30) {
+        return "1M";
+    }
+    if (bucketDays === 60) {
+        return "2M";
+    }
+    if (bucketDays === 90) {
+        return "3M";
+    }
+    if (bucketDays === 180) {
+        return "6M";
+    }
+    return `${bucketDays}D`;
+}
+
+function compressLifecycleCandles(points, maxCandles) {
+    const bucketSize = Math.ceil(points.length / maxCandles);
+    const compressed = [];
+    for (let index = 0; index < points.length; index += bucketSize) {
+        const slice = points.slice(index, index + bucketSize);
+        compressed.push({
+            bucketIndex: slice[0].bucketIndex,
+            date: slice[0].date,
+            timestamp: slice[0].timestamp,
+            timestampValue: slice[0].timestampValue,
+            open: slice[0].open,
+            high: Math.max(...slice.map((item) => item.high)),
+            low: Math.min(...slice.map((item) => item.low)),
+            close: slice[slice.length - 1].close,
+            volume: slice.reduce((sum, item) => sum + item.volume, 0),
+        });
+    }
+    return compressed;
+}
+
+function buildIndexChartHoverState({ points, width, paddingX, pricePanel, priceMin, priceMax, overlayTop, overlayBottom, symbol, source }) {
+    return {
+        width,
+        paddingX,
+        overlayTop,
+        overlayBottom,
+        symbol,
+        source,
+        points: points.map((point, index) => ({
+            ...point,
+            x: projectX(index, points.length, width, paddingX),
+            closeY: projectPanelY(point.close, priceMin, priceMax, pricePanel.top, pricePanel.height),
+        })),
+    };
+}
+
+function buildTimeChartHoverState({ points, width, paddingX, pricePanel, priceMin, priceMax, overlayTop, overlayBottom, minTimestamp, maxTimestamp, symbol, source }) {
+    return {
+        width,
+        paddingX,
+        overlayTop,
+        overlayBottom,
+        symbol,
+        source,
+        points: points.map((point) => ({
+            ...point,
+            x: projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX),
+            closeY: projectPanelY(point.close, priceMin, priceMax, pricePanel.top, pricePanel.height),
+        })),
+    };
+}
+
+function setChartHoverState(state) {
+    chartHoverState = state;
+    initChartHoverInteractions();
+    clearChartHover();
+}
+
+function initChartHoverInteractions() {
+    if (chartHoverHandlersBound) {
+        return;
+    }
+    const chart = document.getElementById("price-chart");
+    if (!chart) {
+        return;
+    }
+    chart.addEventListener("mousemove", handleChartHoverMove);
+    chart.addEventListener("mouseleave", clearChartHover);
+    chartHoverHandlersBound = true;
+}
+
+function handleChartHoverMove(event) {
+    if (!chartHoverState?.points?.length) {
+        clearChartHover();
+        return;
+    }
+
+    const chart = document.getElementById("price-chart");
+    const rect = chart.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * chartHoverState.width;
+    const point = findNearestHoverPoint(x, chartHoverState.points);
+    if (!point) {
+        clearChartHover();
+        return;
+    }
+    renderChartHover(point);
+}
+
+function findNearestHoverPoint(targetX, points) {
+    let bestPoint = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    points.forEach((point) => {
+        const distance = Math.abs(point.x - targetX);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestPoint = point;
+        }
+    });
+    return bestPoint;
+}
+
+function renderChartHover(point) {
+    const overlay = document.getElementById("chart-overlay");
+    const panel = document.getElementById("chart-hover-panel");
+    if (!overlay || !panel || !chartHoverState) {
+        return;
+    }
+
+    panel.className = point.x > chartHoverState.width * 0.58 ? "chart-hover-panel visible right" : "chart-hover-panel visible";
+    panel.innerHTML = `
+        <div class="chart-hover-head">
+            <span>${chartHoverState.symbol}</span>
+            <span class="badge neutral">${String(chartHoverState.source || "-").toUpperCase()}</span>
+        </div>
+        <div class="chart-hover-date">${formatHoverDate(point.timestamp || point.date)}</div>
+        <div class="chart-hover-grid">
+            <div class="chart-hover-item"><span>Open</span><strong>${formatQuote(point.open)}</strong></div>
+            <div class="chart-hover-item"><span>High</span><strong>${formatQuote(point.high)}</strong></div>
+            <div class="chart-hover-item"><span>Low</span><strong>${formatQuote(point.low)}</strong></div>
+            <div class="chart-hover-item"><span>Close</span><strong>${formatQuote(point.close)}</strong></div>
+            <div class="chart-hover-item"><span>Wolumen</span><strong>${compactNumber(point.volume || 0)}</strong></div>
+            <div class="chart-hover-item"><span>Zmiana</span><strong class="${toneClass(point.close - point.open)}">${formatSignedPercent(((point.close - point.open) / (point.open || 1)) * 100)}</strong></div>
+        </div>
+    `;
+
+    overlay.innerHTML = `
+        <line x1="${point.x}" y1="${chartHoverState.overlayTop}" x2="${point.x}" y2="${chartHoverState.overlayBottom}" stroke="rgba(255,255,255,0.24)" stroke-dasharray="4 4" stroke-width="1"></line>
+        <line x1="${chartHoverState.paddingX}" y1="${point.closeY}" x2="${chartHoverState.width - chartHoverState.paddingX}" y2="${point.closeY}" stroke="rgba(255,255,255,0.18)" stroke-dasharray="4 4" stroke-width="1"></line>
+        <circle cx="${point.x}" cy="${point.closeY}" r="4.2" fill="#08141b" stroke="#f0b44a" stroke-width="2"></circle>
+    `;
+}
+
+function clearChartHover() {
+    const overlay = document.getElementById("chart-overlay");
+    const panel = document.getElementById("chart-hover-panel");
+    if (overlay) {
+        overlay.innerHTML = "";
+    }
+    if (panel) {
+        panel.className = "chart-hover-panel";
+        panel.innerHTML = "";
+    }
+}
+
+function formatHoverDate(value) {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return String(value || "-");
+    }
+    return parsed.toLocaleDateString("pl-PL", { year: "numeric", month: "short", day: "2-digit" });
+}
+
+function projectTimeX(timestampValue, minTimestamp, maxTimestamp, width, padding) {
+    if (maxTimestamp <= minTimestamp) {
+        return width / 2;
+    }
+    return padding + ((width - padding * 2) * (timestampValue - minTimestamp)) / (maxTimestamp - minTimestamp);
+}
+
+function buildSinglePanelGrid(width, panel, paddingX) {
+    const rows = 5;
+    const columns = 6;
+    const horizontal = Array.from({ length: rows + 1 }, (_, index) => {
+        const y = panel.top + (panel.height / rows) * index;
+        return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1"></line>`;
+    }).join("");
+    const vertical = Array.from({ length: columns + 1 }, (_, index) => {
+        const x = paddingX + ((width - paddingX * 2) / columns) * index;
+        return `<line x1="${x}" y1="${panel.top}" x2="${x}" y2="${panel.top + panel.height}" stroke="rgba(255,255,255,0.04)" stroke-width="1"></line>`;
+    }).join("");
+    return horizontal + vertical;
+}
+
+function buildMultiPanelGrid(width, panels, paddingX) {
+    const columnCount = 6;
+    const panelEntries = Object.values(panels);
+    const verticalLines = Array.from({ length: columnCount + 1 }, (_, index) => {
+        const x = paddingX + ((width - paddingX * 2) / columnCount) * index;
+        return `<line x1="${x}" y1="${panelEntries[0].top}" x2="${x}" y2="${panelEntries[panelEntries.length - 1].top + panelEntries[panelEntries.length - 1].height}" stroke="rgba(255,255,255,0.04)" stroke-width="1"></line>`;
+    }).join("");
+    const horizontalLines = panelEntries.map((panel) => {
+        const rows = panel === panels.price ? 4 : 2;
+        return Array.from({ length: rows + 1 }, (_, index) => {
+            const y = panel.top + (panel.height / rows) * index;
+            return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1"></line>`;
+        }).join("");
+    }).join("");
+    return `${verticalLines}${horizontalLines}`;
+}
+
+function buildPanelLinePath(points, accessor, minValue, maxValue, width, panel, paddingX) {
+    return points.map((point, index) => {
+        const x = projectX(index, points.length, width, paddingX);
+        const y = projectPanelY(accessor(point), minValue, maxValue, panel.top, panel.height);
+        return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(" ");
+}
+
+function projectX(index, total, width, padding) {
+    if (total <= 1) {
+        return width / 2;
+    }
+    return padding + ((width - padding * 2) * index) / (total - 1);
+}
+
+function projectPanelY(value, minValue, maxValue, panelTop, panelHeight) {
+    if (maxValue === minValue) {
+        return panelTop + panelHeight / 2;
+    }
+    const normalized = (value - minValue) / (maxValue - minValue);
+    return panelTop + panelHeight - normalized * panelHeight;
+}
+
+function buildCandles(points, minValue, maxValue, width, panel, paddingX) {
+    const step = (width - paddingX * 2) / Math.max(points.length, 1);
+    const candleWidth = Math.max(3, Math.min(10, step * 0.62));
+    return points.map((point, index) => {
+        const x = projectX(index, points.length, width, paddingX);
+        const openY = projectPanelY(point.open, minValue, maxValue, panel.top, panel.height);
+        const closeY = projectPanelY(point.close, minValue, maxValue, panel.top, panel.height);
+        const highY = projectPanelY(point.high, minValue, maxValue, panel.top, panel.height);
+        const lowY = projectPanelY(point.low, minValue, maxValue, panel.top, panel.height);
+        const isUp = point.close >= point.open;
+        const color = isUp ? "#4fd1a6" : "#ff7e6b";
+        const bodyY = Math.min(openY, closeY);
+        const bodyHeight = Math.max(1.5, Math.abs(closeY - openY));
+        return `
+            <line x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}" stroke="${color}" stroke-width="1.4"></line>
+            <rect x="${x - candleWidth / 2}" y="${bodyY}" width="${candleWidth}" height="${bodyHeight}" fill="${color}" opacity="0.9" rx="1.5"></rect>
+        `;
+    }).join("");
+}
+
+function buildVolumeBars(points, maxVolume, width, panel, paddingX) {
+    const step = (width - paddingX * 2) / Math.max(points.length, 1);
+    const barWidth = Math.max(3, Math.min(10, step * 0.62));
+    return points.map((point, index) => {
+        const x = projectX(index, points.length, width, paddingX);
+        const barHeight = (point.volume / maxVolume) * panel.height;
+        const y = panel.top + panel.height - barHeight;
+        const color = point.close >= point.open ? "rgba(79,209,166,0.7)" : "rgba(255,126,107,0.72)";
+        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${Math.max(1.5, barHeight)}" fill="${color}" rx="1.2"></rect>`;
+    }).join("");
+}
+
+function buildRsiGuides(width, panel, paddingX) {
+    const levels = [30, 50, 70];
+    return levels.map((level) => {
+        const y = projectPanelY(level, 0, 100, panel.top, panel.height);
+        return `
+            <line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.12)" stroke-dasharray="4 4" stroke-width="1"></line>
+            <text x="${width - paddingX + 4}" y="${y + 4}" fill="#93b7ac" font-size="10">${level}</text>
+        `;
+    }).join("");
+}
+
+function buildMacdHistogram(points, minValue, maxValue, width, panel, paddingX) {
+    const step = (width - paddingX * 2) / Math.max(points.length, 1);
+    const barWidth = Math.max(2, Math.min(8, step * 0.52));
+    const zeroY = projectPanelY(0, minValue, maxValue, panel.top, panel.height);
+    return points.map((point, index) => {
+        const x = projectX(index, points.length, width, paddingX);
+        const valueY = projectPanelY(point.macd_hist, minValue, maxValue, panel.top, panel.height);
+        const y = Math.min(zeroY, valueY);
+        const height = Math.max(1.2, Math.abs(valueY - zeroY));
+        const color = point.macd_hist >= 0 ? "rgba(79,209,166,0.72)" : "rgba(255,126,107,0.72)";
+        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${height}" fill="${color}" rx="1"></rect>`;
+    }).join("");
+}
+
+function buildMacdZeroLine(minValue, maxValue, width, panel, paddingX) {
+    const y = projectPanelY(0, minValue, maxValue, panel.top, panel.height);
+    return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.12)" stroke-dasharray="4 4" stroke-width="1"></line>`;
+}
+
+function buildPriceReferenceLine(value, label, color, minValue, maxValue, width, panel, paddingX) {
+    const y = projectPanelY(value, minValue, maxValue, panel.top, panel.height);
+    return `
+        <line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="${color}" stroke-dasharray="6 4" stroke-width="1"></line>
+        <text x="${paddingX}" y="${y - 6}" fill="${color}" font-size="10">${label} ${formatQuote(value)}</text>
+    `;
+}
+
+function buildPanelLabels(width, panels, paddingX, chartPackage, latest, volumeMax) {
+    const volumeLabel = compactNumber(volumeMax);
+    return `
+        <text x="${paddingX}" y="${panels.price.top - 10}" fill="#eaf5f0" font-size="12">Price + EMA</text>
+        <text x="${paddingX}" y="${panels.volume.top - 10}" fill="#eaf5f0" font-size="12">Volume | max ${volumeLabel}</text>
+        <text x="${paddingX}" y="${panels.rsi.top - 10}" fill="#eaf5f0" font-size="12">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
+        <text x="${paddingX}" y="${panels.macd.top - 10}" fill="#eaf5f0" font-size="12">MACD ${percentFormatter.format(chartPackage.summary.macd)} / signal ${percentFormatter.format(chartPackage.summary.macd_signal)}</text>
+        <text x="${width - paddingX}" y="${panels.price.top - 10}" fill="#93b7ac" font-size="11" text-anchor="end">close ${formatQuote(latest.close)}</text>
+    `;
+}
+
+function buildChartLegend(width, paddingX) {
+    const items = [
+        { label: "EMA20", color: "#4fd1a6" },
+        { label: "EMA50", color: "#8db9ff" },
+        { label: "RSI", color: "#f0b44a" },
+        { label: "MACD", color: "#4fd1a6" },
+        { label: "Signal", color: "#ffb347" },
+    ];
+    return items.map((item, index) => {
+        const x = paddingX + index * 86;
+        return `
+            <line x1="${x}" y1="548" x2="${x + 16}" y2="548" stroke="${item.color}" stroke-width="3"></line>
+            <text x="${x + 22}" y="552" fill="#93b7ac" font-size="10">${item.label}</text>
+        `;
+    }).join("");
+}
+
+function compactNumber(value) {
+    if (value >= 1_000_000_000) {
+        return `${numberFormatter.format(value / 1_000_000_000)}B`;
+    }
+    if (value >= 1_000_000) {
+        return `${numberFormatter.format(value / 1_000_000)}M`;
+    }
+    if (value >= 1_000) {
+        return `${numberFormatter.format(value / 1_000)}K`;
+    }
+    return numberFormatter.format(value);
+}
+
+function buildSummaryCard(label, value, extraClass) {
+    return `
+        <div class="summary-card ${extraClass}">
+            <span>${label}</span>
+            <strong class="${extraClass}">${value}</strong>
+        </div>
+    `;
+}
+
+function buildQuickCard(label, value, description) {
+    return `
+        <div class="quick-card">
+            <span>${label}</span>
+            <strong>${value}</strong>
+            <small>${description}</small>
+        </div>
+    `;
+}
+
+function buildTradeBucketItem(trade, isProfit) {
+    return `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>${trade.symbol}</span>
+                <span class="badge ${isProfit ? "buy" : "sell"}">${isProfit ? "PLUS" : "MINUS"}</span>
+            </div>
+            <div class="stack-item-meta">
+                Kupno: ${formatQuote(trade.buy_price)}<br>
+                Sprzedaz: ${trade.sell_price === null ? "-" : formatQuote(trade.sell_price)}<br>
+                Wynik: <span class="${isProfit ? "positive" : "negative"}">${formatQuote(trade.profit)}</span><br>
+                Zamkniecie: ${trade.closed_at ? new Date(trade.closed_at).toLocaleString("pl-PL") : "-"}
+            </div>
+        </div>
+    `;
+}
+
+function paintLearning(learning) {
+    const findings = document.getElementById("learning-findings");
+    const curriculum = document.getElementById("learning-curriculum");
+    const nextSteps = document.getElementById("learning-next-steps");
+    const knowledgeBase = document.getElementById("learning-knowledge-base");
+    const requirements = document.getElementById("learning-requirements");
+
+    findings.innerHTML = (learning.findings || []).map((item) => `
+        <div class="stack-item">
+            <div class="stack-item-title"><span>${item.title}</span></div>
+            <div class="stack-item-meta">${item.description}</div>
+        </div>
+    `).join("");
+
+    curriculum.innerHTML = (learning.curriculum || []).map((item) => `
+        <div class="stack-item">
+            <div class="stack-item-title"><span>${item.title}</span></div>
+            <div class="stack-item-meta">${item.description}</div>
+        </div>
+    `).join("");
+
+    nextSteps.innerHTML = (learning.next_steps || []).map((item) => `
+        <div class="stack-item">
+            <div class="stack-item-title"><span>Nastepny eksperyment</span></div>
+            <div class="stack-item-meta">${item}</div>
+        </div>
+    `).join("");
+
+    knowledgeBase.innerHTML = (learning.knowledge_base || []).map((item) => `
+        <div class="stack-item">
+            <div class="stack-item-title"><span>${item.title}</span></div>
+            <div class="stack-item-meta">${item.description}</div>
+        </div>
+    `).join("");
+
+    requirements.innerHTML = (learning.requirements || []).map((item) => `
+        <div class="stack-item">
+            <div class="stack-item-title"><span>${item.title}</span></div>
+            <div class="stack-item-meta">${item.description}</div>
+        </div>
+    `).join("");
+}
+
+function paintArticles(articles) {
+    const container = document.getElementById("article-list");
+    if (!articles?.length) {
+        container.innerHTML = `<div class="empty-state">Brak materialow edukacyjnych.</div>`;
+        return;
+    }
+
+    container.innerHTML = articles.map((article) => `
+        <article class="article-card">
+            <div class="article-meta">${article.source}</div>
+            <h3>${article.title}</h3>
+            <p>${article.summary}</p>
+            <a class="article-link" href="${article.url}" target="_blank" rel="noreferrer">Otworz artykul</a>
+        </article>
+    `).join("");
+}
+
+function paintSystemStatus(systemStatus) {
+    const container = document.getElementById("system-status");
+    if (!systemStatus) {
+        container.innerHTML = `<div class="empty-state">Brak statusu systemu.</div>`;
+        return;
+    }
+
+    const scheduler = systemStatus.scheduler || {};
+    const schedulerActive = Boolean(scheduler.active);
+    const schedulerHealth = scheduler.health || (schedulerActive ? "active" : scheduler.enabled ? "stale" : "stopped");
+    document.getElementById("scheduler-button").textContent = schedulerActive ? "Zatrzymaj scheduler" : scheduler.enabled ? "Napraw scheduler" : "Start scheduler";
+
+    container.innerHTML = `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Scheduler</span>
+                <span class="badge ${schedulerHealth === "active" ? "buy" : schedulerHealth === "stale" ? "sell" : "hold"}">${schedulerHealth === "active" ? "AKTYWNY" : schedulerHealth === "stale" ? "UTKNAL" : "STOP"}</span>
+            </div>
+            <div class="stack-item-meta">
+                Interwal: ${scheduler.interval_seconds || "-"} s<br>
+                Ostatni start: ${scheduler.last_run_started_at || "-"}<br>
+                Ostatnie zakonczenie: ${scheduler.last_run_completed_at || "-"}<br>
+                Worker zyje: ${scheduler.thread_alive ? "tak" : "nie"}<br>
+                Watchdog zyje: ${scheduler.watchdog_alive ? "tak" : "nie"}<br>
+                Liczba automatycznych cykli: ${scheduler.total_runs || 0}${scheduler.last_error ? `<br>Info: ${scheduler.last_error}` : ""}
+            </div>
+        </div>
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Tryb pracy</span>
+                <span class="badge ${systemStatus.trading_mode === "PAPER" ? "hold" : "sell"}">${systemStatus.trading_mode}</span>
+            </div>
+            <div class="stack-item-meta">
+                Learning mode: ${systemStatus.learning_mode ? "aktywny" : "wylaczony"}<br>
+                Exploration rate: ${percentFormatter.format((systemStatus.exploration_rate || 0) * 100)}%<br>
+                Interwal rynku: ${systemStatus.market_interval}<br>
+                Quote: ${systemStatus.quote_currency}<br>
+                Coiny w watchliscie: ${systemStatus.tracked_symbols_count}<br>
+                Max trade/day: ${systemStatus.max_trades_per_day}<br>
+                Max open positions: ${systemStatus.max_open_positions}
+            </div>
+        </div>
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Zrodla danych</span>
+                <span class="badge neutral">LIVE</span>
+            </div>
+            <div class="stack-item-meta">
+                ${(systemStatus.data_sources || []).join(", ")}<br>
+                Binance private API: ${systemStatus.binance_private_ready ? "gotowe" : "brak kluczy, tylko publiczne dane/paper trading"}<br>
+                PLN FX: ${dashboardState?.config?.display_rate_source || "-"}<br>
+                Ostatnie ceny moga minimalnie roznic sie od Bing lub CoinGecko, bo panel bierze kurs z gield crypto i przelicza go do PLN oddzielnym live FX.
+            </div>
+        </div>
+    `;
+}
+
+function paintBacktest(backtest) {
+    const container = document.getElementById("backtest-ranking");
+    if (!backtest?.rankings?.length) {
+        container.innerHTML = `<div class="empty-state">Brak wynikow backtestu.</div>`;
+        return;
+    }
+
+    container.innerHTML = backtest.rankings.map((row, index) => `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>${index + 1}. ${row.label}</span>
+                <span class="badge ${index === 0 ? "buy" : "neutral"}">ROI ${formatSignedPercent(row.roi)}</span>
+            </div>
+            <div class="stack-item-meta">
+                Profit: ${formatQuote(row.profit)}<br>
+                Win rate: ${percentFormatter.format(row.win_rate)}%<br>
+                Trades: ${row.trades}<br>
+                Max drawdown: ${percentFormatter.format(row.max_drawdown)}%<br>
+                Testowane symbole: ${row.symbols_tested}
+            </div>
+        </div>
+    `).join("");
+}
+
+function toneClass(value) {
+    if (value > 0) {
+        return "positive";
+    }
+    if (value < 0) {
+        return "negative";
+    }
+    return "";
+}
+
+function formatSignedPercent(value) {
+    const prefix = value > 0 ? "+" : "";
+    return `${prefix}${percentFormatter.format(value)}%`;
+}
+
+function formatQuote(value, sourceCurrency = null) {
+    const quoteCurrency = sourceCurrency || dashboardState?.config?.quote_currency || "USD";
+    const displayCurrency = dashboardState?.config?.display_currency || quoteCurrency;
+    const convertedValue = convertCurrency(value, quoteCurrency, displayCurrency);
+    if (["USD", "PLN", "EUR", "GBP"].includes(displayCurrency)) {
+        return new Intl.NumberFormat("pl-PL", {
+            style: "currency",
+            currency: displayCurrency,
+            maximumFractionDigits: Math.abs(convertedValue) < 1 ? 4 : 2,
+        }).format(convertedValue);
+    }
+    return `${numberFormatter.format(convertedValue)} ${displayCurrency}`;
+}
+
+function convertCurrency(value, sourceCurrency, targetCurrency) {
+    if (value === null || value === undefined) {
+        return value;
+    }
+    if (sourceCurrency === targetCurrency) {
+        return value;
+    }
+    const rates = dashboardState?.config?.display_fx_rates || {};
+    const key = `${String(sourceCurrency).toUpperCase()}_${String(targetCurrency).toUpperCase()}`;
+    const rate = rates[key] || 1;
+    return Number(value) * rate;
+}
+
+function signalBadgeClass(signal) {
+    if (signal === "BOTTOM_WATCH" || signal === "UP_BIAS") {
+        return "buy";
+    }
+    if (signal === "TOP_WATCH" || signal === "DOWN_BIAS") {
+        return "sell";
+    }
+    return "neutral";
+}
+
+async function runCycle() {
+    setStatus("Uruchamianie cyklu agenta...");
+    const response = await fetch("/api/run-cycle", { method: "POST" });
+    if (!response.ok) {
+        throw new Error("Nie udalo sie uruchomic cyklu.");
+    }
+    const payload = await response.json();
+    await applyDashboardPayload(payload.dashboard, true);
+    setStatus(`Cykl zakonczony: ${new Date().toLocaleTimeString("pl-PL")}`);
+}
+
+async function loadAiInsight() {
+    setStatus("Generowanie komentarza AI...");
+    const symbolQuery = selectedSymbol ? `?symbol=${encodeURIComponent(selectedSymbol)}` : "";
+    const response = await fetch(`/api/ai-insight${symbolQuery}`);
+    if (!response.ok) {
+        throw new Error("Nie udalo sie pobrac komentarza AI.");
+    }
+    const payload = await response.json();
+    document.getElementById("ai-message").textContent = payload.message;
+    if (payload.enabled) {
+        await renderDashboard();
+        document.getElementById("ai-message").textContent = payload.message;
+    }
+    setStatus(payload.enabled ? "Komentarz AI gotowy." : "AI nieaktywne bez klucza API.");
+}
+
+async function switchAgentMode(mode) {
+    setStatus(`Zmiana trybu agenta na ${mode}...`);
+    const response = await fetch(`/api/agent-mode/${encodeURIComponent(mode)}`, { method: "POST" });
+    if (!response.ok) {
+        throw new Error("Nie udalo sie zmienic trybu agenta.");
+    }
+    const payload = await response.json();
+    await applyDashboardPayload(payload.dashboard, true);
+    setStatus(`Tryb agenta aktywny: ${payload.mode}`);
+}
+
+async function resetPaperPortfolio() {
+    const confirmed = window.confirm("To wyczysci paper trade i przywroci kapital startowy. Scheduler zostanie zatrzymany, zeby agent od razu znowu nie otworzyl pozycji. Kontynuowac?");
+    if (!confirmed) {
+        return;
+    }
+    setStatus("Resetowanie paper portfela do stanu startowego...");
+    const response = await fetch("/api/paper/reset", { method: "POST" });
+    if (!response.ok) {
+        throw new Error("Nie udalo sie zresetowac paper portfela.");
+    }
+    const payload = await response.json();
+    chartHistoryCache = {};
+    await applyDashboardPayload(payload.dashboard, true);
+    setStatus(payload.scheduler_stopped ? "Paper portfel zresetowany. Scheduler zostal zatrzymany, zeby zostalo czyste 1000 PLN." : payload.message);
+}
+
+async function toggleScheduler() {
+    const scheduler = dashboardState?.system_status?.scheduler || {};
+    const shouldStop = Boolean(scheduler.active);
+    const endpoint = shouldStop ? "/api/scheduler/stop" : "/api/scheduler/start";
+    setStatus(shouldStop ? "Zatrzymywanie schedulera..." : scheduler.enabled ? "Naprawianie schedulera..." : "Uruchamianie schedulera...");
+    const response = await fetch(endpoint, { method: "POST" });
+    if (!response.ok) {
+        throw new Error("Nie udalo sie zmienic stanu schedulera.");
+    }
+    await renderDashboard();
+}
+
+function openPageMenu() {
+    document.body.classList.add("menu-open");
+}
+
+function closePageMenu() {
+    document.body.classList.remove("menu-open");
+}
+
+function initPageMenu() {
+    const menuToggle = document.getElementById("menu-toggle-button");
+    const menuClose = document.getElementById("menu-close-button");
+    const menu = document.getElementById("page-menu");
+    if (!menuToggle || !menuClose || !menu) {
+        return;
+    }
+    menuToggle.addEventListener("click", openPageMenu);
+    menuClose.addEventListener("click", closePageMenu);
+    menu.querySelectorAll("a").forEach((link) => {
+        link.addEventListener("click", () => {
+            closePageMenu();
+        });
+    });
+}
+
+document.getElementById("refresh-button").addEventListener("click", async () => {
+    try {
+        await renderDashboard();
+    } catch (error) {
+        setStatus(error.message);
+    }
+});
+
+document.getElementById("run-cycle-button").addEventListener("click", async () => {
+    try {
+        await runCycle();
+    } catch (error) {
+        setStatus(error.message);
+    }
+});
+
+document.getElementById("ai-button").addEventListener("click", async () => {
+    try {
+        await loadAiInsight();
+    } catch (error) {
+        setStatus(error.message);
+    }
+});
+
+document.getElementById("scheduler-button").addEventListener("click", async () => {
+    try {
+        await toggleScheduler();
+    } catch (error) {
+        setStatus(error.message);
+    }
+});
+
+document.getElementById("reset-paper-button").addEventListener("click", async () => {
+    try {
+        await resetPaperPortfolio();
+    } catch (error) {
+        setStatus(error.message);
+    }
+});
+
+initPageMenu();
+renderDashboardWithRetry().catch((error) => setStatus(error.message));
+window.setInterval(() => {
+    updateAgentPulseStrip();
+}, 1000);

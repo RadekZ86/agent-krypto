@@ -1,0 +1,598 @@
+from __future__ import annotations
+
+from datetime import date
+from datetime import datetime, timedelta
+from statistics import mean
+from typing import Any
+
+import requests
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.models import Decision, LearningLog, SimulatedTrade
+from app.services.analysis_frame import build_indicator_frame
+from app.services.market_data import load_symbol_market_rows
+from app.services.probability_engine import ProbabilityEngine
+
+
+LEARNING_ARTICLES = [
+    {
+        "title": "RSI: jak czytac momentum bez zgadywania dna",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/terms/r/rsi.asp",
+        "summary": "RSI najlepiej dziala razem z trendem. Poziomy 30 i 70 nie sa magiczne, a w silnych trendach trzeba czytac RSI kontekstowo i szukac potwierdzenia z EMA lub MACD.",
+        "focus": ["RSI", "trend context", "divergence"],
+    },
+    {
+        "title": "MACD: momentum, crossovers i falszywe sygnaly",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/terms/m/macd.asp",
+        "summary": "MACD pokazuje relacje miedzy EMA 12 i EMA 26. Sam crossover nie wystarcza, bo w konsolidacji potrafi generowac falszywe wejscia, wiec trzeba go laczyc z trendem i wolumenem.",
+        "focus": ["MACD", "crossovers", "trend confirmation"],
+    },
+    {
+        "title": "Day trading: plan, testy i dziennik decyzji",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/articles/trading/06/daytradingretail.asp",
+        "summary": "Kluczowe sa plan wejsc, wyjsc i limit ryzyka. Strategia powinna przejsc backtest, paper trading i regularny przeglad wynikow zanim dostanie realny kapital.",
+        "focus": ["paper trading", "backtest", "journal"],
+    },
+    {
+        "title": "Zasady dyscypliny: nie gon trendu, trzymaj plan",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/articles/trading/10/top-ten-rules-for-trading.asp",
+        "summary": "Najwiekszym przeciwnikiem systemu jest impulsywna zmiana zasad. Strategia potrzebuje z gory ustalonych warunkow wyjscia, kontroli emocji i przygotowania na zmiennosc.",
+        "focus": ["discipline", "exit rules", "volatility"],
+    },
+    {
+        "title": "Risk management in crypto trading",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/risk-management-in-crypto-trading",
+        "summary": "Rozmiar pozycji, stop loss, relacja zysk/ryzyko i ograniczanie ekspozycji do jednego aktywa to podstawa przejscia z eksperymentu do stabilnego procesu.",
+        "focus": ["position sizing", "stop loss", "risk-reward"],
+    },
+    {
+        "title": "Support and resistance basics for crypto",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/support-and-resistance-explained",
+        "summary": "Strefy wsparcia i oporu sa bardziej uzyteczne niz pojedyncza linia. Agent powinien uczyc sie reakcji ceny wokol tych stref i patrzec, czy pojawia sie obrona wolumenowa.",
+        "focus": ["support", "resistance", "price reaction"],
+    },
+    {
+        "title": "Candlestick patterns without overfitting",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/trading/candlestick-charting-what-is-it/",
+        "summary": "Swiece sa przydatne dopiero w kontekscie trendu, wolumenu i poziomow. Agent nie powinien uczyc sie pojedynczych formacji bez potwierdzenia z otoczenia rynkowego.",
+        "focus": ["candles", "context", "confirmation"],
+    },
+    {
+        "title": "Volume analysis: when participation matters",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/articles/technical/02/010702.asp",
+        "summary": "Wybicia bez wolumenu czesto wygasaja. Agent powinien porownywac swieze ruchy ceny z przyspieszeniem obrotu, a nie tylko z samym kierunkiem swiecy.",
+        "focus": ["volume", "breakout", "participation"],
+    },
+    {
+        "title": "How to use moving averages in trend regimes",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/a-guide-to-the-most-common-technical-indicators",
+        "summary": "EMA i SMA najlepiej dzialaja jako filtr reżimu. Agent powinien rozroznic trend, konsolidacje i moment przejscia, zamiast traktowac srednie jako samotny trigger.",
+        "focus": ["EMA", "regime", "trend filter"],
+    },
+    {
+        "title": "Trading journal: from intuition to measurable process",
+        "source": "Coinbase Learn",
+        "url": "https://www.coinbase.com/learn/crypto-basics/what-is-risk-management",
+        "summary": "Sam wynik transakcji nie wystarcza. Agent powinien zapisywac setup, kontekst, confidence, powod wejscia i powod wyjscia, zeby po czasie zobaczyc, co dziala naprawde.",
+        "focus": ["journal", "process", "review"],
+    },
+    {
+        "title": "Drawdown management for volatile assets",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/what-is-a-stop-loss-order",
+        "summary": "Ochrona kapitalu jest wazniejsza niz maksymalizacja pojedynczego trade'u. Agent powinien mierzyc serie strat, drawdown i czas potrzebny do odrobienia kapitalu.",
+        "focus": ["drawdown", "stop loss", "capital preservation"],
+    },
+    {
+        "title": "Market structure: higher highs, lower lows and invalidation",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/what-is-support-and-resistance",
+        "summary": "Struktura rynku pomaga odroznic trend od szumu. Agent powinien rozpoznawac wybicie poprzedniego szczytu, utrate lokalnego dolka i miejsca invalidation setupu.",
+        "focus": ["market structure", "break of structure", "invalidation"],
+    },
+    {
+        "title": "Position sizing for systematic trading",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/articles/active-trading/091814/position-sizing-importance-trading.asp",
+        "summary": "Wielkosc pozycji ma wiekszy wplyw na przetrwanie systemu niz pojedynczy trigger wejscia. Agent powinien traktowac sizing jako osobna decyzje, nie dodatek do BUY/SELL.",
+        "focus": ["position sizing", "risk budget", "survival"],
+    },
+    {
+        "title": "False breakouts and liquidity grabs",
+        "source": "Cointelegraph Learn",
+        "url": "https://cointelegraph.com/learn/articles/what-is-a-bull-trap-and-how-to-avoid-it",
+        "summary": "Nie kazde wybicie ma follow-through. Agent powinien obserwowac, czy cena utrzymuje poziom po wybiciu i czy rosnacy wolumen nie gasnie natychmiast po impulsie.",
+        "focus": ["false breakout", "bull trap", "liquidity"],
+    },
+    {
+        "title": "Trend pullback entries instead of chasing green candles",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/how-to-use-stop-limit-orders-on-binance",
+        "summary": "Najgorsze wejscia czesto pojawiaja sie po gonieniu swiecy. Agent powinien preferowac cofniecia do strefy wartosci i szukac potwierdzenia zamiast wejsc na emocji.",
+        "focus": ["pullback", "entry quality", "discipline"],
+    },
+]
+
+
+KNOWLEDGE_BASE = [
+    {
+        "title": "Playbook 1: trend continuation",
+        "description": "Kupuj tylko wtedy, gdy cena broni EMA20 nad EMA50, MACD jest dodatni lub rosnie, a wolumen nie slabnie. Uczenie: odrozniaj zdrowy trend od przegrzanego po wybiciu.",
+    },
+    {
+        "title": "Playbook 2: mean reversion",
+        "description": "Szukaj tylko kontrolowanych cofniec do wsparcia przy niskim RSI i bez paniki wolumenowej. Uczenie: nie lap spadajacego noza w pelnym trendzie DOWN.",
+    },
+    {
+        "title": "Playbook 3: breakout validation",
+        "description": "Wybicie ma sens dopiero po wyjsciu nad opor z ponadprzecietnym wolumenem i utrzymaniem ceny nad poziomem. Uczenie: rozpoznawaj falszywe wybicia i szybkie powroty pod opor.",
+    },
+    {
+        "title": "Playbook 4: exit discipline",
+        "description": "Wyjscie ma byc planowane przed wejsciem: gdzie bierzesz profit, gdzie tniesz strate i kiedy redukujesz pozycje. Uczenie: nie pozwalaj, by wygrany trade zamienial sie w strate.",
+    },
+    {
+        "title": "Playbook 5: market regime",
+        "description": "Agent powinien odroznic trend wzrostowy, spadkowy i boczny. Ten sam sygnal RSI/MACD ma inne znaczenie w kazdym z tych srodowisk.",
+    },
+    {
+        "title": "Playbook 6: portfolio context",
+        "description": "Nie kupuj wielu silnie skorelowanych coinow naraz. Uczenie: ekspozycja na jeden motyw rynku moze zwiekszyc ryzyko bardziej niz liczba pozycji.",
+    },
+    {
+        "title": "Playbook 7: structure break",
+        "description": "Silny BUY ma wieksza wartosc, gdy cena wybija poprzedni swing high i utrzymuje poziom. Uczenie: odrozniaj prawdziwa zmiane struktury od jednorazowego piku.",
+    },
+    {
+        "title": "Playbook 8: failed breakout",
+        "description": "Jesli wybicie wraca szybko pod poziom, agent powinien obnizyc zaufanie do setupu. Uczenie: nie kazde wybicie oznacza nowy trend.",
+    },
+    {
+        "title": "Playbook 9: volatility contraction then expansion",
+        "description": "Po okresie uspokojenia zmiennosci rynek czesto daje czytelniejszy impuls. Uczenie: porownuj faze sciskania z ruchem wolumenu i kierunkiem EMA.",
+    },
+    {
+        "title": "Playbook 10: no-trade zones",
+        "description": "Brak przewagi to tez decyzja. Uczenie: w srodku chaotycznej konsolidacji agent powinien preferowac HOLD zamiast wymuszac trade.",
+    },
+    {
+        "title": "Playbook 11: scaling out",
+        "description": "Nie kazdy zysk trzeba zamykac jednym ruchem. Uczenie: przy przewadze momentum mozna rozwazac czesciowa realizacje i ochrone reszty pozycji.",
+    },
+    {
+        "title": "Playbook 12: drawdown defense",
+        "description": "Po serii strat agent powinien schlodzic tempo i podniesc wymagania wejscia. Uczenie: ochrona kapitalu ma pierwszenstwo przed aktywnoscia.",
+    },
+]
+
+
+class LearningCenter:
+    def __init__(self) -> None:
+        self.probability_engine = ProbabilityEngine()
+        self._lifecycle_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
+
+    def build_market_summary(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
+        rows = load_symbol_market_rows(session, symbol, limit=limit)
+        if len(rows) < 10:
+            return None
+
+        df = build_indicator_frame(rows)
+        summary, insights = self._analyze_frame(df)
+        return {"symbol": symbol, "summary": summary, "insights": insights}
+
+    def build_chart_package(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
+        rows = load_symbol_market_rows(session, symbol, limit=limit)
+        if len(rows) < 10:
+            return None
+
+        df = build_indicator_frame(rows)
+        summary, insights = self._analyze_frame(df)
+
+        return {
+            "symbol": symbol,
+            "points": [
+                {
+                    "date": row["timestamp"].strftime("%Y-%m-%d"),
+                    "timestamp": row["timestamp"].isoformat(),
+                    "open": round(float(row["open"]), 4),
+                    "high": round(float(row["high"]), 4),
+                    "low": round(float(row["low"]), 4),
+                    "close": round(float(row["close"]), 4),
+                    "ema20": round(float(row["ema20"]), 4),
+                    "ema50": round(float(row["ema50"]), 4),
+                    "rsi": round(float(row["rsi"]), 2),
+                    "macd": round(float(row["macd"]), 4),
+                    "macd_signal": round(float(row["macd_signal"]), 4),
+                    "macd_hist": round(float(row["macd_hist"]), 4),
+                    "volume": round(float(row["volume"]), 2),
+                    "source": row["source"],
+                }
+                for _, row in df.iterrows()
+            ],
+            "summary": summary,
+            "insights": insights,
+        }
+
+    def _analyze_frame(self, df) -> tuple[dict[str, Any], list[str]]:
+        latest = df.iloc[-1]
+        previous = df.iloc[-2] if len(df) > 1 else latest
+        last_20 = df.tail(min(20, len(df)))
+        price_change_7d = float(latest["change_7d"])
+        price_change_30d = float(latest["change_30d"])
+        volatility_14d = float(latest["volatility_14d"])
+        support = float(last_20["close"].min())
+        resistance = float(last_20["close"].max())
+        signal_alignment = self._signal_alignment(latest)
+        rsi_zone = self._rsi_zone(float(latest["rsi"]))
+        macd_state = "bullish" if float(latest["macd"]) >= float(latest["macd_signal"]) else "bearish"
+        trend = str(latest["trend"])
+        probabilities = self.probability_engine.estimate(latest, previous)
+
+        insights = [
+            f"Trend ceny jest {self._translate_trend(trend)}: EMA20 {'powyzej' if trend == 'UP' else 'ponizej'} EMA50.",
+            f"RSI jest w strefie {rsi_zone} ({float(latest['rsi']):.1f}), wiec sygnal trzeba czytac razem z trendem.",
+            f"MACD jest {macd_state} i {'potwierdza' if signal_alignment != 'mixed' else 'nie potwierdza jednoznacznie'} kierunek rynku.",
+            f"Strefa obserwacji to okolice wsparcia {support:.2f} i oporu {resistance:.2f}.",
+            f"Szacunek ruchu w gore: {probabilities['up_probability']:.1f}%, lokalnego dolka: {probabilities['bottom_probability']:.1f}%, lokalnego szczytu: {probabilities['top_probability']:.1f}%.",
+            f"Wolumen zmienil sie o {float(latest['volume_change']) * 100:.1f}% vs poprzednia swieca, co pomaga odroznic ruch aktywny od przypadkowego.",
+        ]
+
+        summary = {
+            "current_price": round(float(latest["close"]), 4),
+            "change_7d": round(price_change_7d, 2),
+            "change_30d": round(price_change_30d, 2),
+            "volatility_14d": round(volatility_14d, 2),
+            "support": round(support, 4),
+            "resistance": round(resistance, 4),
+            "signal_alignment": signal_alignment,
+            "rsi_zone": rsi_zone,
+            "macd_state": macd_state,
+            "trend": trend,
+            "ema20": round(float(latest["ema20"]), 4),
+            "ema50": round(float(latest["ema50"]), 4),
+            "macd": round(float(latest["macd"]), 4),
+            "macd_signal": round(float(latest["macd_signal"]), 4),
+            "rsi": round(float(latest["rsi"]), 2),
+            "volume_change": round(float(latest["volume_change"]) * 100, 2),
+            "change_24h": round(float(latest["change_24h"]), 2),
+            "up_probability": probabilities["up_probability"],
+            "bottom_probability": probabilities["bottom_probability"],
+            "top_probability": probabilities["top_probability"],
+            "reversal_signal": probabilities["reversal_signal"],
+            "probability_explanation": probabilities["explanation"],
+            "source": str(latest["source"]),
+        }
+        return summary, insights
+
+    def build_learning_state(
+        self,
+        session: Session,
+        market_rows: list[dict[str, Any]],
+        chart_packages: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        recent_decisions = session.execute(select(Decision).order_by(desc(Decision.timestamp)).limit(40)).scalars().all()
+        recent_trades = session.execute(select(SimulatedTrade).order_by(desc(SimulatedTrade.opened_at)).limit(40)).scalars().all()
+        recent_logs = session.execute(select(LearningLog).order_by(desc(LearningLog.timestamp)).limit(20)).scalars().all()
+
+        closed_trades = [trade for trade in recent_trades if trade.status == "CLOSED"]
+        hold_ratio = (
+            sum(1 for row in recent_decisions if row.decision == "HOLD") / len(recent_decisions) * 100
+            if recent_decisions
+            else 0.0
+        )
+        downtrend_count = sum(1 for row in market_rows if row["trend"] == "DOWN")
+        oversold_count = sum(1 for row in market_rows if row["rsi"] < 30)
+        win_rate = (
+            sum(1 for trade in closed_trades if (trade.profit or 0.0) > 0) / len(closed_trades) * 100
+            if closed_trades
+            else 0.0
+        )
+        avg_profit = mean((trade.profit or 0.0) for trade in closed_trades) if closed_trades else 0.0
+
+        curriculum = [
+            {
+                "title": "Filtr trendu",
+                "description": "Agent ma laczyc RSI i MACD z EMA20/EMA50, zeby nie kupowac agresywnie w silnym trendzie spadkowym.",
+            },
+            {
+                "title": "Jakosc wejscia",
+                "description": "Przed BUY system ma sprawdzac zgodnosc momentum, wolumenu i trendu zamiast reagowac na pojedynczy sygnal.",
+            },
+            {
+                "title": "Kontrola ryzyka",
+                "description": "Kazda pozycja ma miec ograniczona wielkosc, stop loss i oczekiwany stosunek zysku do ryzyka.",
+            },
+            {
+                "title": "Retrospektywa",
+                "description": "Po kazdym zamknieciu pozycji agent ma zapisywac, czy decyzja byla poprawna i w jakim kontekscie rynkowym.",
+            },
+            {
+                "title": "Czytanie swiec",
+                "description": "Agent ma analizowac korpus, knoty, lokalny zakres i reakcje na wsparciu/oporze, zamiast patrzec tylko na zamkniecie swiecy.",
+            },
+            {
+                "title": "Wolumen i uczestnictwo",
+                "description": "Silny ruch bez potwierdzenia wolumenowego powinien miec nizsza wage niz ruch z rosnacym udzialem rynku.",
+            },
+            {
+                "title": "Rezim rynku",
+                "description": "System ma najpierw rozpoznac trend, konsolidacje albo panike, a dopiero potem dobierac odpowiedni setup.",
+            },
+        ]
+
+        findings: list[dict[str, str]] = []
+        if market_rows and downtrend_count >= max(2, len(market_rows) // 2):
+            findings.append(
+                {
+                    "title": "Rynek jest defensywny",
+                    "description": f"{downtrend_count} z {len(market_rows)} monitorowanych aktywow jest w trendzie spadkowym. Agent powinien trenowac selekcje BUY tylko przy silnym potwierdzeniu.",
+                }
+            )
+        if oversold_count:
+            findings.append(
+                {
+                    "title": "Oversold nie znaczy automatyczny BUY",
+                    "description": f"{oversold_count} aktywa maja RSI ponizej 30. To dobry material do nauki odrozniania paniki od realnego odbicia.",
+                }
+            )
+        if not closed_trades:
+            findings.append(
+                {
+                    "title": "Za malo probek do oceny strategii",
+                    "description": "Agent musi zbudowac serie minimum kilkunastu zamknietych transakcji, zanim zacznie stroic progi wejscia i wyjscia.",
+                }
+            )
+        else:
+            findings.append(
+                {
+                    "title": "Skutecznosc ostatnich zamknietych transakcji",
+                    "description": f"Win rate wynosi {win_rate:.1f}%, a sredni wynik transakcji to {avg_profit:.2f} PLN. To baza do kalibracji confidence i stop lossu.",
+                }
+            )
+        if hold_ratio > 65:
+            findings.append(
+                {
+                    "title": "Strategia jest ostrozna",
+                    "description": f"{hold_ratio:.1f}% ostatnich decyzji to HOLD. Agent powinien nauczyc sie odrozniania braku sygnalu od zbyt twardych progow wejscia.",
+                }
+            )
+        if recent_logs:
+            findings.append(
+                {
+                    "title": "Dziennik nauki jest aktywny",
+                    "description": f"W learning_log zapisano {len(recent_logs)} ostatnich wpisow. To mozna wykorzystac do przegladu typowych bledow i warunkow rynku.",
+                }
+            )
+        if not findings:
+            findings.append(
+                {
+                    "title": "System zbiera dane",
+                    "description": "Brak jednoznacznych odchylen jeszcze nie znaczy, ze strategia jest gotowa. Agent nadal powinien uczyc sie na kolejnych cyklach.",
+                }
+            )
+
+        next_steps = [
+            "Zbieraj 50-100 probek paper tradingu przed rozluznieniem progow BUY.",
+            "Porownuj skutecznosc decyzji przy RSI<30 osobno dla trendu UP i DOWN.",
+            "Mierz, czy confidence koreluje z realnym wynikiem transakcji.",
+            "Testuj, czy filtr wolumenu poprawia win rate bez pogorszenia drawdown.",
+            "Oceniaj, czy reakcja swiecy na wsparciu/oporze poprawia trafnosc wejsc.",
+            "Buduj osobne statystyki dla breakout, trend continuation i mean reversion.",
+        ]
+
+        requirements = [
+            {
+                "title": "Dane order book i microstructure",
+                "description": "Do lepszej pracy intraday agent potrzebuje glebi rynku, spreadu i szybkich zmian plynnosci, a nie tylko swiec OHLCV.",
+            },
+            {
+                "title": "News i sentyment",
+                "description": "Sam wykres nie wychwyci naglych newsow. Warto dodac kalendarz wydarzen, naglowki i filtr sentymentu dla krypto.",
+            },
+            {
+                "title": "Lepsze etykietowanie probek",
+                "description": "Do prawdziwej nauki modelowej agent potrzebuje oznaczonych wynikow: ktore setupy dawaly realny follow-through, a ktore byly falszywym sygnalem.",
+            },
+            {
+                "title": "Kontrola portfelowa",
+                "description": "Trzeba mierzyc ekspozycje sektorowa, korelacje miedzy coinami i dzienny limit straty dla calego portfela.",
+            },
+            {
+                "title": "Monitoring produkcyjny",
+                "description": "Do stabilnej pracy potrzeba alertow, logow błedow API, retry oraz kontroli opoznien pobierania danych z gield.",
+            },
+        ]
+
+        return {
+            "curriculum": curriculum,
+            "findings": findings,
+            "next_steps": next_steps,
+            "requirements": requirements,
+            "knowledge_base": KNOWLEDGE_BASE,
+            "chart_watchlist": [symbol for symbol, package in chart_packages.items() if package is not None] or [row["symbol"] for row in market_rows],
+        }
+
+    def get_articles(self) -> list[dict[str, Any]]:
+        return LEARNING_ARTICLES
+
+    def build_lifecycle_history(self, symbol: str, force_refresh: bool = False) -> dict[str, Any]:
+        cache_entry = self._lifecycle_cache.get(symbol)
+        if not force_refresh and cache_entry is not None and (datetime.utcnow() - cache_entry[0]) < timedelta(hours=6):
+            return cache_entry[1]
+
+        coin_id = settings.coingecko_ids.get(symbol)
+        points: list[dict[str, Any]] = []
+        history_source = "binance"
+        try:
+            points = self._fetch_binance_lifecycle_history(symbol)
+        except requests.RequestException:
+            points = []
+
+        if not points and coin_id is not None:
+            history_source = "coingecko"
+            try:
+                points = self._fetch_coingecko_lifecycle_history(coin_id)
+            except requests.RequestException:
+                points = []
+
+        points = self._apply_history_floor(symbol, points)
+
+        if not points:
+            result = {"symbol": symbol, "points": [], "summary": {"history_mode": "max", "history_source": history_source}}
+            self._lifecycle_cache[symbol] = (datetime.utcnow(), result)
+            return result
+
+        ath_point = max(points, key=lambda item: item["close"])
+        atl_point = min(points, key=lambda item: item["close"])
+        start_point = points[0]
+        end_point = points[-1]
+        start_dt = datetime.fromisoformat(start_point["timestamp"])
+        end_dt = datetime.fromisoformat(end_point["timestamp"])
+        years_listed = round(max((end_dt - start_dt).days / 365.25, 0.0), 2)
+        result = {
+            "symbol": symbol,
+            "points": points,
+            "summary": {
+                "history_mode": "max",
+                "start_date": start_point["date"],
+                "end_date": end_point["date"],
+                "inception_price": start_point["close"],
+                "current_price": end_point["close"],
+                "ath_price": ath_point["close"],
+                "ath_date": ath_point["date"],
+                "atl_price": atl_point["close"],
+                "atl_date": atl_point["date"],
+                "change_since_inception": round(((end_point["close"] / start_point["close"]) - 1) * 100, 2) if start_point["close"] else 0.0,
+                "years_listed": years_listed,
+                "points_count": len(points),
+                "history_source": history_source,
+                "has_ohlc": any(point.get("high") is not None and point.get("low") is not None for point in points),
+            },
+        }
+        self._lifecycle_cache[symbol] = (datetime.utcnow(), result)
+        return result
+
+    def _apply_history_floor(self, symbol: str, points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        floor_value = settings.history_start_floors.get(symbol)
+        if floor_value is None:
+            return points
+        floor_date = date.fromisoformat(floor_value)
+        filtered = [point for point in points if date.fromisoformat(point["date"]) >= floor_date]
+        return filtered or points
+
+    def _fetch_coingecko_lifecycle_history(self, coin_id: str) -> list[dict[str, Any]]:
+        response = requests.get(
+            f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
+            params={"vs_currency": settings.quote_currency.lower(), "days": "max", "interval": "daily"},
+            timeout=30,
+            headers={"Accept": "application/json", "User-Agent": "Agent-Krypto/1.0"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        price_rows = payload.get("prices", [])
+        volume_rows = payload.get("total_volumes", [])
+        market_cap_rows = payload.get("market_caps", [])
+
+        volume_by_date = {int(row[0]): float(row[1]) for row in volume_rows}
+        market_cap_by_date = {int(row[0]): float(row[1]) for row in market_cap_rows}
+        points: list[dict[str, Any]] = []
+        previous_close: float | None = None
+        for row in price_rows:
+            timestamp = int(row[0])
+            close = float(row[1])
+            open_price = previous_close if previous_close is not None else close
+            high = max(open_price, close)
+            low = min(open_price, close)
+            points.append(
+                {
+                    "date": datetime.utcfromtimestamp(timestamp / 1000).strftime("%Y-%m-%d"),
+                    "timestamp": datetime.utcfromtimestamp(timestamp / 1000).isoformat(),
+                    "open": round(open_price, 8),
+                    "high": round(high, 8),
+                    "low": round(low, 8),
+                    "close": round(close, 8),
+                    "volume": round(float(volume_by_date.get(timestamp, 0.0)), 2),
+                    "market_cap": round(float(market_cap_by_date.get(timestamp, 0.0)), 2),
+                }
+            )
+            previous_close = close
+        return points
+
+    def _fetch_binance_lifecycle_history(self, symbol: str) -> list[dict[str, Any]]:
+        pair = settings.binance_symbols.get(symbol)
+        if pair is None:
+            return []
+
+        points: list[dict[str, Any]] = []
+        start_time = 0
+        last_open_time: int | None = None
+        while True:
+            response = requests.get(
+                "https://api.binance.com/api/v3/klines",
+                params={"symbol": pair, "interval": "1d", "limit": 1000, "startTime": start_time},
+                timeout=30,
+                headers={"Accept": "application/json", "User-Agent": "Agent-Krypto/1.0"},
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not rows:
+                break
+
+            for row in rows:
+                open_time = int(row[0])
+                if last_open_time is not None and open_time <= last_open_time:
+                    continue
+                last_open_time = open_time
+                points.append(
+                    {
+                        "date": datetime.utcfromtimestamp(open_time / 1000).strftime("%Y-%m-%d"),
+                        "timestamp": datetime.utcfromtimestamp(open_time / 1000).isoformat(),
+                        "open": round(float(row[1]), 8),
+                        "high": round(float(row[2]), 8),
+                        "low": round(float(row[3]), 8),
+                        "close": round(float(row[4]), 8),
+                        "volume": round(float(row[7]) if float(row[7]) > 0 else float(row[5]), 2),
+                        "market_cap": 0.0,
+                    }
+                )
+
+            if len(rows) < 1000:
+                break
+            start_time = int(rows[-1][0]) + 86400000
+
+        return points
+
+    def _signal_alignment(self, latest) -> str:
+        bullish_rsi = float(latest["rsi"]) < 35
+        bullish_macd = float(latest["macd"]) >= float(latest["macd_signal"])
+        bullish_trend = float(latest["ema20"]) >= float(latest["ema50"])
+        bearish_rsi = float(latest["rsi"]) > 65
+        bearish_macd = float(latest["macd"]) < float(latest["macd_signal"])
+        bearish_trend = float(latest["ema20"]) < float(latest["ema50"])
+
+        if bullish_rsi and bullish_macd and bullish_trend:
+            return "bullish"
+        if bearish_rsi and bearish_macd and bearish_trend:
+            return "bearish"
+        return "mixed"
+
+    def _rsi_zone(self, rsi_value: float) -> str:
+        if rsi_value < 30:
+            return "oversold"
+        if rsi_value > 70:
+            return "overbought"
+        return "neutral"
+
+    def _translate_trend(self, trend: str) -> str:
+        return {"UP": "wzrostowy", "DOWN": "spadkowy"}.get(trend, "boczny")

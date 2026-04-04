@@ -1,0 +1,36 @@
+name: Deploy to MyDevil
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: s84.mydevil.net
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            cd ~/domains/MagicParty.usermd.net/app
+            
+            # Pobierz najnowszy kod
+            git fetch origin main
+            git reset --hard origin/main
+            
+            # Aktywuj venv i zainstaluj zależności
+            source .venv/bin/activate
+            pip install -r requirements.txt --quiet
+            
+            # Restart aplikacji
+            devil daemon restart agent-krypto || echo "Daemon restart failed - check config"
+            
+            echo "Deploy completed!"

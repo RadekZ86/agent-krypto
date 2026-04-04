@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }}</title>
+    <link rel="stylesheet" href="/static/styles.css?v={{ static_assets_version }}">
+</head>
+<body>
+    <div class="background-grid"></div>
+    <button id="menu-toggle-button" class="menu-toggle-button ghost-button" type="button">Menu</button>
+    <aside id="page-menu" class="page-menu panel">
+        <div class="page-menu-head">
+            <strong>Skroty panelu</strong>
+            <button id="menu-close-button" class="menu-close-button" type="button" aria-label="Zamknij menu">X</button>
+        </div>
+        <nav class="page-menu-links">
+            <a href="#hero-section">Start</a>
+            <a href="#controls-section">Sterowanie</a>
+            <a href="#summary-section">Podsumowanie</a>
+            <a href="#portfolio-section">Pozycje</a>
+            <a href="#charts-section">Wykresy</a>
+            <a href="#market-section">Rynek</a>
+            <a href="#activity-section">Decyzje i transakcje</a>
+            <a href="#operations-section">Status</a>
+            <a href="#ai-section">Komentarz AI</a>
+            <a href="#learning-section">Nauka</a>
+            <a href="#articles-section">Artykuly</a>
+        </nav>
+    </aside>
+    <main class="shell">
+        <section id="hero-section" class="hero panel">
+            <div>
+                <p class="eyebrow">System uczacy sie</p>
+                <h1>{{ app_name }}</h1>
+                <p class="hero-copy">
+                    Dashboard do live analizy rynku z API gield, wykresow, paper tradingu, probabilistyki kierunku i nauki strategii.
+                </p>
+            </div>
+            <div class="hero-actions">
+                <button id="run-cycle-button" class="primary-button">Uruchom cykl</button>
+                <button id="refresh-button" class="secondary-button">Odswiez</button>
+                <button id="scheduler-button" class="secondary-button">Scheduler</button>
+                <button id="reset-paper-button" class="secondary-button">Reset do 1000 PLN</button>
+                <button id="ai-button" class="ghost-button">Analiza AI</button>
+            </div>
+        </section>
+
+        <section id="mode-strip" class="mode-strip panel"></section>
+
+        <section id="controls-section" class="control-grid">
+            <article class="panel control-panel">
+                <div class="section-head">
+                    <h2>Tryb agenta</h2>
+                    <span class="inline-meta">Ostrozny / normalny / ryzykowny</span>
+                </div>
+                <div id="agent-mode-switcher" class="switcher"></div>
+                <div id="agent-mode-description" class="stack-list compact"></div>
+            </article>
+
+            <article class="panel control-panel">
+                <div class="section-head">
+                    <h2>Kasa i API</h2>
+                    <span class="inline-meta">Proste rozliczenie</span>
+                </div>
+                <div id="capital-summary" class="quick-summary-grid finance-grid"></div>
+                <div id="api-usage-summary" class="stack-list compact finance-api-list"></div>
+            </article>
+        </section>
+
+        <section class="metrics-grid">
+            <article class="metric-card panel">
+                <span>Gotowka</span>
+                <strong id="cash-balance">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Equity</span>
+                <strong id="equity">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Kupione</span>
+                <strong id="buy-count">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Sprzedane</span>
+                <strong id="sell-count">-</strong>
+            </article>
+            <article class="metric-card panel accent">
+                <span>Otwarte pozycje</span>
+                <strong id="open-positions-count">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Zysk symulowany</span>
+                <strong id="gross-profit">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Strata symulowana</span>
+                <strong id="gross-loss">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Bilans zamknietych symulacji</span>
+                <strong id="realized-profit">-</strong>
+            </article>
+            <article class="metric-card panel">
+                <span>Win rate</span>
+                <strong id="win-rate">-</strong>
+            </article>
+        </section>
+
+        <section id="summary-section" class="quick-grid">
+            <article class="panel quick-summary-panel">
+                <div class="section-head">
+                    <h2>Szybki podglad</h2>
+                    <span class="inline-meta">Jednym spojrzeniem</span>
+                </div>
+                <div id="quick-summary" class="quick-summary-grid"></div>
+            </article>
+        </section>
+
+        <section id="portfolio-section" class="overview-grid">
+            <article class="panel overview-panel">
+                <div class="section-head">
+                    <h2>Kupil teraz</h2>
+                    <span class="inline-meta">Otwarte coiny</span>
+                </div>
+                <div id="bought-coins-menu" class="coin-menu"></div>
+            </article>
+
+            <article class="panel overview-panel">
+                <div class="section-head">
+                    <h2>Sprzedal z zyskiem</h2>
+                    <span class="inline-meta">Ostatnie trafione wyjscia</span>
+                </div>
+                <div id="profit-trades-list" class="stack-list compact"></div>
+            </article>
+
+            <article class="panel overview-panel">
+                <div class="section-head">
+                    <h2>Sprzedal ze strata</h2>
+                    <span class="inline-meta">Ostatnie slabsze wyjscia</span>
+                </div>
+                <div id="loss-trades-list" class="stack-list compact"></div>
+            </article>
+        </section>
+
+        <section id="charts-section" class="analytics-grid">
+            <article class="panel chart-panel">
+                <div class="section-head">
+                    <h2>Analiza wykresu</h2>
+                    <div class="chart-toolbar">
+                        <div id="chart-tabs" class="switcher switcher-tight"></div>
+                        <div id="chart-range-switcher" class="switcher switcher-tight"></div>
+                        <div id="chart-interval-switcher" class="switcher switcher-tight"></div>
+                    </div>
+                </div>
+                <div id="chart-switcher" class="switcher chart-symbol-switcher"></div>
+                <div class="chart-stage">
+                    <svg id="price-chart" class="chart-svg" viewBox="0 0 920 560" preserveAspectRatio="none"></svg>
+                    <svg id="chart-overlay" class="chart-svg chart-overlay" viewBox="0 0 920 560" preserveAspectRatio="none" aria-hidden="true"></svg>
+                    <div id="chart-hover-panel" class="chart-hover-panel" aria-hidden="true"></div>
+                </div>
+                <div id="chart-summary" class="summary-grid"></div>
+                <div id="chart-insights" class="stack-list compact"></div>
+            </article>
+
+            <details id="learning-section" class="panel learning-panel disclosure-panel">
+                <summary class="disclosure-summary">
+                    <span>
+                        <strong>Czego agent sie uczy</strong>
+                        <small>Rozwijane menu zamiast stalego bloku na glownym panelu</small>
+                    </span>
+                    <span class="badge neutral">ROZWIN</span>
+                </summary>
+                <div class="disclosure-body">
+                    <div id="learning-findings" class="stack-list compact"></div>
+                    <div class="section-head section-head-sub">
+                        <h2>Program nauki</h2>
+                    </div>
+                    <div id="learning-curriculum" class="stack-list compact"></div>
+                    <div class="section-head section-head-sub">
+                        <h2>Nastepne kroki</h2>
+                    </div>
+                    <div id="learning-next-steps" class="stack-list compact"></div>
+                    <div class="section-head section-head-sub">
+                        <h2>Baza wiedzy</h2>
+                    </div>
+                    <div id="learning-knowledge-base" class="stack-list compact"></div>
+                    <div class="section-head section-head-sub">
+                        <h2>Co jeszcze potrzebne</h2>
+                    </div>
+                    <div id="learning-requirements" class="stack-list compact"></div>
+                </div>
+            </details>
+        </section>
+
+        <section id="market-section" class="main-grid">
+            <article class="panel">
+                <div class="section-head">
+                    <h2>Rynek</h2>
+                    <span class="inline-meta">{{ symbols|join(', ') }}</span>
+                </div>
+                <div id="market-sector-filter" class="switcher market-filter"></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Cena</th>
+                                <th>24h</th>
+                                <th>RSI</th>
+                                <th>MACD</th>
+                                <th>Trend</th>
+                                <th>Wolumen</th>
+                                <th>P up</th>
+                                <th>P dolek</th>
+                                <th>P szczyt</th>
+                                <th>Setup</th>
+                                <th>Decyzja</th>
+                            </tr>
+                        </thead>
+                        <tbody id="market-table"></tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article class="panel">
+                <div class="section-head">
+                    <h2>Pozycje</h2>
+                    <span class="inline-meta">Portfel symulacyjny</span>
+                </div>
+                <div id="positions-list" class="stack-list"></div>
+            </article>
+        </section>
+
+        <section id="activity-section" class="secondary-grid">
+            <article class="panel">
+                <div class="section-head">
+                    <h2>Ostatnie decyzje</h2>
+                </div>
+                <div id="decision-list" class="stack-list compact"></div>
+            </article>
+
+            <article class="panel">
+                <div class="section-head">
+                    <h2>Transakcje kupna i sprzedazy</h2>
+                </div>
+                <div id="trade-list" class="stack-list compact"></div>
+            </article>
+        </section>
+
+        <section id="operations-section" class="operations-grid">
+            <article class="panel">
+                <div class="section-head">
+                    <h2>Status pracy</h2>
+                    <span class="inline-meta">Scheduler, tryb, zrodla i readiness</span>
+                </div>
+                <div id="system-status" class="stack-list compact"></div>
+            </article>
+
+            <article class="panel">
+                <div class="section-head">
+                    <h2>Backtest strategii</h2>
+                    <span class="inline-meta">Ranking 1 / 2 / 3</span>
+                </div>
+                <div id="backtest-ranking" class="stack-list compact"></div>
+            </article>
+        </section>
+
+        <section id="ai-section" class="panel insight-panel">
+            <div class="section-head">
+                <h2>Komentarz systemu</h2>
+                <span class="inline-meta">OpenAI + wykres wybranego symbolu</span>
+            </div>
+            <p id="ai-message" class="ai-message">
+                System moze teraz analizowac tez wybrany wykres i program nauki agenta.
+            </p>
+            <p id="status-line" class="status-line">Ladowanie danych...</p>
+        </section>
+
+        <details id="articles-section" class="panel articles-panel disclosure-panel">
+            <summary class="disclosure-summary">
+                <span>
+                    <strong>Materialy z sieci</strong>
+                    <small>Artykuly edukacyjne ukryte poza glownym widokiem</small>
+                </span>
+                <span class="badge neutral">ROZWIN</span>
+            </summary>
+            <div class="disclosure-body">
+                <div id="article-list" class="article-grid"></div>
+            </div>
+        </details>
+    </main>
+
+    <script src="/static/app.js?v={{ static_assets_version }}"></script>
+</body>
+</html>

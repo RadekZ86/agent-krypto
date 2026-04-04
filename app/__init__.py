@@ -1,0 +1,1 @@
+"""Agent Krypto application package."""
