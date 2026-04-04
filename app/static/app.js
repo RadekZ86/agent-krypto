@@ -658,12 +658,14 @@ function paintChartError(message) {
 function paintWallet(wallet, binanceWallet) {
     if (binanceWallet) {
         const totalValue = binanceWallet.total_value || 0;
-        const usdtHolding = (binanceWallet.holdings || []).find(h => h.asset === "USDT" || h.asset === "BUSD" || h.asset === "FDUSD");
-        const cashValue = usdtHolding ? usdtHolding.value : 0;
+        const walletQuote = binanceWallet.quote_currency || "USDT";
+        const stableAssets = ["USDT", "BUSD", "FDUSD", "PLN", "EUR", "USD", "USDC"];
+        const cashHolding = (binanceWallet.holdings || []).find(h => h.asset === walletQuote) || (binanceWallet.holdings || []).find(h => stableAssets.includes(h.asset));
+        const cashValue = cashHolding ? cashHolding.value : 0;
         const lockedValue = totalValue - cashValue;
-        const holdingsCount = (binanceWallet.holdings || []).filter(h => h.value > 1 && h.asset !== "USDT" && h.asset !== "BUSD" && h.asset !== "FDUSD").length;
-        document.getElementById("cash-balance").textContent = formatQuote(cashValue);
-        document.getElementById("equity").textContent = formatQuote(totalValue);
+        const holdingsCount = (binanceWallet.holdings || []).filter(h => h.value > 1 && !stableAssets.includes(h.asset)).length;
+        document.getElementById("cash-balance").textContent = formatQuote(cashValue, walletQuote);
+        document.getElementById("equity").textContent = formatQuote(totalValue, walletQuote);
         document.getElementById("open-positions-count").textContent = String(holdingsCount);
         document.getElementById("buy-count").textContent = String(wallet.buy_count);
         document.getElementById("sell-count").textContent = String(wallet.sell_count);
@@ -722,7 +724,7 @@ function paintModeStrip(systemStatus, config, wallet) {
         <div class="mode-strip-copy">
             <strong>${paperMode ? "To juz dziala na zywych danych rynkowych, ale handluje tylko wirtualnym kapitalem." : "System jest gotowy do realnych zlecen."}</strong>
             <span>Ostatni zamkniety trade: ${lastClosedMarkup}</span>
-            <span>Agent pracuje na parach o najlepszej plynnosci: ${preferredQuotes || "USDT"}. Głowna sciezka to ${config?.quote_currency || "USD"}/${config?.display_currency || config?.quote_currency} w widoku oraz USDT do par tradingowych.</span>
+            <span>Agent pracuje na parach o najlepszej plynnosci: ${preferredQuotes || "USDT"}. Głowna sciezka to ${config?.quote_currency || "USD"}/${config?.display_currency || config?.quote_currency} w widoku. W trybie LIVE agent automatycznie wykrywa dostepne pary na koncie.</span>
             <div class="mode-live-metrics">
                 <span id="cycle-running-counter" class="status-pill neutral">Cykl teraz: -</span>
                 <span id="last-cycle-counter" class="status-pill neutral">Ostatni cykl: -</span>
@@ -923,14 +925,17 @@ function paintCapitalSummary(wallet, binanceWallet) {
     const container = document.getElementById("capital-summary");
     if (binanceWallet) {
         const totalValue = binanceWallet.total_value || 0;
-        const usdtHolding = (binanceWallet.holdings || []).find(h => h.asset === "USDT" || h.asset === "BUSD" || h.asset === "FDUSD");
-        const cashValue = usdtHolding ? usdtHolding.value : 0;
+        const walletQuote = binanceWallet.quote_currency || "USDT";
+        const stableAssets = ["USDT", "BUSD", "FDUSD", "PLN", "EUR", "USD", "USDC"];
+        const cashHolding = (binanceWallet.holdings || []).find(h => h.asset === walletQuote) || (binanceWallet.holdings || []).find(h => stableAssets.includes(h.asset));
+        const cashValue = cashHolding ? cashHolding.value : 0;
         const lockedValue = totalValue - cashValue;
-        const holdingsCount = (binanceWallet.holdings || []).filter(h => h.value > 1 && h.asset !== "USDT" && h.asset !== "BUSD" && h.asset !== "FDUSD").length;
+        const holdingsCount = (binanceWallet.holdings || []).filter(h => h.value > 1 && !stableAssets.includes(h.asset)).length;
+        const cashLabel = `Wolne ${walletQuote}`;
         container.innerHTML = `
-            ${buildQuickCard("Portfel Binance", formatQuote(totalValue), "Lacznie wszystkie aktywa na Binance")}
-            ${buildQuickCard("Wolne USDT", formatQuote(cashValue), "Gotowka dostepna do handlu")}
-            ${buildQuickCard("W pozycjach", formatQuote(lockedValue), `${holdingsCount} aktywow w portfelu`)}
+            ${buildQuickCard("Portfel Binance", formatQuote(totalValue, walletQuote), "Lacznie wszystkie aktywa na Binance")}
+            ${buildQuickCard(cashLabel, formatQuote(cashValue, walletQuote), "Gotowka dostepna do handlu")}
+            ${buildQuickCard("W pozycjach", formatQuote(lockedValue, walletQuote), `${holdingsCount} aktywow w portfelu`)}
             ${buildQuickCard("Fee lacznie (paper)", formatQuote(wallet.fees_paid), "Prowizje z symulacji paper")}
             ${buildQuickCard("Gotowka paper", formatQuote(wallet.cash_balance), "Rownolegle saldo paper trading")}
             ${buildQuickCard("Zablokowane paper", formatQuote(wallet.capital_locked_cost), "Paper pozycje otwarte")}

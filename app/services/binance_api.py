@@ -323,11 +323,16 @@ class BinanceClient:
         
         price_map = {p["symbol"]: float(p["price"]) for p in prices}
         
+        # Bridge currencies for cross-conversion when no direct pair exists
+        bridge_currencies = ["USDT", "USDC", "BTC", "BNB", "EUR"]
+        
         total_value = 0.0
         holdings = []
         
         for balance in balances:
             asset = balance["asset"]
+            # Treat Earn wrapper tokens (LD*) as their underlying asset for pricing
+            price_asset = asset[2:] if asset.startswith("LD") and len(asset) > 3 else asset
             free = float(balance["free"])
             locked = float(balance["locked"])
             total = free + locked
@@ -336,19 +341,37 @@ class BinanceClient:
                 continue
             
             # Calculate value in quote currency
-            if asset == quote_currency:
+            value = 0.0
+            if price_asset == quote_currency:
                 value = total
             else:
-                symbol = f"{asset}{quote_currency}"
+                # Try direct pair
+                symbol = f"{price_asset}{quote_currency}"
                 if symbol in price_map:
                     value = total * price_map[symbol]
                 else:
                     # Try reverse pair
-                    reverse_symbol = f"{quote_currency}{asset}"
+                    reverse_symbol = f"{quote_currency}{price_asset}"
                     if reverse_symbol in price_map and price_map[reverse_symbol] > 0:
                         value = total / price_map[reverse_symbol]
                     else:
-                        value = 0
+                        # Try bridge conversion: asset→bridge→quote
+                        for bridge in bridge_currencies:
+                            if bridge == price_asset or bridge == quote_currency:
+                                continue
+                            ab = f"{price_asset}{bridge}"
+                            bq = f"{bridge}{quote_currency}"
+                            ab_price = price_map.get(ab)
+                            bq_price = price_map.get(bq)
+                            if ab_price and bq_price:
+                                value = total * ab_price * bq_price
+                                break
+                            # Try reverse bridge: bridge→asset, quote→bridge
+                            ba = f"{bridge}{price_asset}"
+                            qb = f"{quote_currency}{bridge}"
+                            if ba in price_map and price_map[ba] > 0 and bq_price:
+                                value = total / price_map[ba] * bq_price
+                                break
             
             total_value += value
             holdings.append({
@@ -356,7 +379,7 @@ class BinanceClient:
                 "free": free,
                 "locked": locked,
                 "total": total,
-                "value": value
+                "value": round(value, 2)
             })
         
         # Sort by value

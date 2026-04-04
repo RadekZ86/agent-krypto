@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Callable
 
 from app.config import BASE_DIR
+
+
+def _utcnow_iso() -> str:
+    """Return current UTC time as ISO string with 'Z' suffix for correct JS parsing."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class SchedulerService:
@@ -58,7 +63,7 @@ class SchedulerService:
         return True
 
     def run_once(self) -> None:
-        self.last_run_started_at = datetime.utcnow().isoformat()
+        self.last_run_started_at = _utcnow_iso()
         self.current_run_started_at = self.last_run_started_at
         self.is_running = True
         self._write_history("cycle_started", started_at=self.last_run_started_at, total_runs=self.total_runs)
@@ -75,12 +80,12 @@ class SchedulerService:
             self._write_history(
                 "cycle_completed",
                 started_at=self.last_run_started_at,
-                completed_at=datetime.utcnow().isoformat(),
+                completed_at=_utcnow_iso(),
                 total_runs=self.total_runs,
                 processed=int(result.get("processed", 0)) if isinstance(result, dict) else None,
             )
         finally:
-            self.last_run_completed_at = datetime.utcnow().isoformat()
+            self.last_run_completed_at = _utcnow_iso()
             self.is_running = False
             self.current_run_started_at = None
 
@@ -132,7 +137,7 @@ class SchedulerService:
     def _write_history(self, event: str, **payload: Any) -> None:
         self.history_log_path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": _utcnow_iso(),
             "event": event,
             **payload,
         }
