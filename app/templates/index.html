@@ -122,7 +122,7 @@
         </div>
         <div class="header-center" id="mode-strip"></div>
         <div class="header-right">
-            <button id="run-cycle-button" class="header-btn primary">
+            <button id="run-cycle-button" class="header-btn primary" title="Uruchom cykl">
                 <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <span>Cykl</span>
             </button>
@@ -131,6 +131,7 @@
             </button>
             <button id="scheduler-button" class="header-btn" title="Scheduler">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span class="sched-label">Scheduler</span>
             </button>
             <button id="ai-button" class="header-btn accent" title="Analiza AI">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4"/></svg>
@@ -165,7 +166,30 @@
         <!-- ============ VIEW: DASHBOARD ============ -->
         <section class="app-view active" data-view="dashboard">
             <div class="view-content">
-                <!-- Metrics Row -->
+                
+                <!-- Mobile hero balance card (visible only on mobile) -->
+                <div class="mobile-hero">
+                    <div class="mobile-hero-main">
+                        <span class="mobile-hero-label">Bilans</span>
+                        <strong id="mobile-hero-balance" class="mobile-hero-value">-</strong>
+                    </div>
+                    <div class="mobile-hero-row">
+                        <div class="mobile-hero-stat positive">
+                            <span>Zysk</span>
+                            <strong id="mobile-hero-profit">-</strong>
+                        </div>
+                        <div class="mobile-hero-stat negative">
+                            <span>Strata</span>
+                            <strong id="mobile-hero-loss">-</strong>
+                        </div>
+                        <div class="mobile-hero-stat">
+                            <span>Win rate</span>
+                            <strong id="mobile-hero-winrate">-</strong>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Metrics Row (desktop: all 9, mobile: compact 2x3 grid) -->
                 <div class="metrics-strip">
                     <div class="metric-tile">
                         <span class="metric-label">Gotowka</span>
@@ -203,6 +227,18 @@
                         <span class="metric-label">Bilans</span>
                         <strong id="realized-profit" class="metric-value">-</strong>
                     </div>
+                </div>
+                
+                <!-- Mobile action bar (visible only on mobile) -->
+                <div class="mobile-actions">
+                    <button id="mobile-cycle-btn" class="mobile-action-btn primary">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Uruchom cykl
+                    </button>
+                    <button id="mobile-scheduler-btn" class="mobile-action-btn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Scheduler
+                    </button>
                 </div>
                 
                 <!-- Main Dashboard Grid -->

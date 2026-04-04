@@ -636,6 +636,20 @@ body.app-mode {
 }
 
 /* ============================================ */
+/* MOBILE HERO (hidden on desktop)             */
+/* ============================================ */
+
+.mobile-hero {
+    display: none;
+}
+
+.mobile-actions {
+    display: none;
+}
+
+.sched-label { /* visible on desktop header only */ }
+
+/* ============================================ */
 /* APP MODE - MOBILE LAYOUT                    */
 /* ============================================ */
 
@@ -648,8 +662,8 @@ body.app-mode {
     right: 0;
     background: rgba(6, 16, 22, 0.98);
     border-top: 1px solid var(--line);
-    padding: 8px 0;
-    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 0;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
     z-index: 100;
     backdrop-filter: blur(10px);
 }
@@ -664,7 +678,7 @@ body.app-mode {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     padding: 8px 12px;
     border: none;
     background: transparent;
@@ -680,9 +694,10 @@ body.app-mode {
 }
 
 .mobile-nav-item span {
-    font-size: 0.65rem;
+    font-size: 0.6rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    font-weight: 600;
 }
 
 .mobile-nav-item.active {
@@ -693,11 +708,19 @@ body.app-mode {
     background: rgba(255, 255, 255, 0.05);
 }
 
-/* Mobile: Hide sidebar, show bottom nav */
+/* ============================================ */
+/* MOBILE BREAKPOINT                           */
+/* ============================================ */
+
 @media (max-width: 768px) {
+    /* Base font bump for readability */
+    body {
+        font-size: 15px;
+    }
+    
     body.app-mode {
         grid-template-columns: 1fr;
-        grid-template-rows: var(--header-height) 1fr auto;
+        grid-template-rows: auto 1fr auto;
         grid-template-areas:
             "header"
             "main"
@@ -713,12 +736,16 @@ body.app-mode {
         grid-area: mobilenav;
     }
     
+    /* ---- HEADER: clean, minimal on mobile ---- */
     .app-header {
-        padding: 0 12px;
+        padding: 0 16px;
+        height: 52px;
+        min-height: 52px;
     }
     
     .header-left h1 {
-        font-size: 1.1rem;
+        font-size: 1.2rem;
+        font-weight: 700;
     }
     
     .status-badge {
@@ -729,7 +756,14 @@ body.app-mode {
         display: none;
     }
     
-    .header-btn span {
+    /* On mobile: hide text labels & some buttons from header */
+    .header-btn span,
+    .header-btn .sched-label {
+        display: none;
+    }
+    
+    #scheduler-button,
+    #run-cycle-button {
         display: none;
     }
     
@@ -738,50 +772,141 @@ body.app-mode {
         min-height: 40px;
         min-width: 40px;
         justify-content: center;
+        border-radius: 10px;
     }
     
     .header-btn svg {
-        width: 20px;
-        height: 20px;
+        width: 22px;
+        height: 22px;
     }
     
+    .header-right {
+        gap: 6px;
+    }
+    
+    /* ---- MAIN CONTENT ---- */
     .app-main {
         padding-bottom: 0;
+        overflow: hidden;
     }
     
     .view-content {
-        padding: 10px 12px;
-        padding-bottom: calc(12px + 72px);
+        padding: 16px;
+        padding-bottom: calc(16px + 68px);
+        gap: 16px;
+    }
+    
+    /* ---- MOBILE HERO: big balance card ---- */
+    .mobile-hero {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 20px;
+        background: linear-gradient(135deg, rgba(41, 98, 255, 0.12), rgba(0, 188, 212, 0.08));
+        border: 1px solid rgba(41, 98, 255, 0.25);
+        border-radius: 16px;
+    }
+    
+    .mobile-hero-main {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    
+    .mobile-hero-label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-weight: 600;
+    }
+    
+    .mobile-hero-value {
+        font-size: 2rem;
+        font-weight: 800;
+        color: var(--text-bright);
+        letter-spacing: -0.02em;
+    }
+    
+    .mobile-hero-row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+    }
+    
+    .mobile-hero-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    
+    .mobile-hero-stat span {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+    }
+    
+    .mobile-hero-stat strong {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--text-bright);
+    }
+    
+    .mobile-hero-stat.positive strong { color: var(--positive); }
+    .mobile-hero-stat.negative strong { color: var(--negative); }
+    
+    /* ---- MOBILE ACTIONS: cycle + scheduler buttons ---- */
+    .mobile-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
         gap: 10px;
     }
     
-    /* Metrics: horizontal scroll strip */
-    .metrics-strip {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
+    .mobile-action-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
         gap: 8px;
-        padding-bottom: 4px;
+        padding: 14px 16px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--bg-alt);
+        color: var(--text);
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 150ms ease;
+        min-height: 50px;
     }
     
-    .metrics-strip::-webkit-scrollbar { display: none; }
-    
-    .metric-tile {
-        min-width: 100px;
-        flex: 0 0 auto;
-        padding: 8px 12px;
+    .mobile-action-btn svg {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
     }
     
-    .metric-label {
-        font-size: 0.62rem;
+    .mobile-action-btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
     }
     
-    .metric-value {
-        font-size: 0.95rem;
+    .mobile-action-btn.primary:active {
+        background: #1e53e4;
     }
     
-    /* Grids to single column */
+    .mobile-action-btn:active {
+        background: rgba(255, 255, 255, 0.08);
+    }
+    
+    /* ---- METRICS: hide on mobile (hero replaces them) ---- */
+    .metrics-strip {
+        display: none;
+    }
+    
+    /* ---- GRIDS: single column ---- */
     .dashboard-grid,
     .market-layout,
     .charts-layout,
@@ -790,7 +915,7 @@ body.app-mode {
     .ai-layout,
     .settings-grid {
         grid-template-columns: 1fr;
-        gap: 8px;
+        gap: 12px;
     }
     
     .dashboard-grid .agent-card,
@@ -806,6 +931,7 @@ body.app-mode {
     
     .finance-grid {
         grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
     }
     
     .view-toolbar {
@@ -818,36 +944,50 @@ body.app-mode {
         flex-wrap: wrap;
     }
     
-    /* ---- Mobile Accordion Cards ---- */
+    /* ---- CARDS: clean, spacious, readable ---- */
     .card {
-        border-radius: 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(42, 46, 57, 0.6);
         overflow: hidden;
     }
     
-    .dashboard-grid .card > .card-header {
+    .card-header {
         padding: 16px 18px;
+        background: rgba(42, 46, 57, 0.25);
+        border-bottom: 1px solid rgba(42, 46, 57, 0.5);
+    }
+    
+    .card-header h3 {
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--text-bright);
+    }
+    
+    .card-body {
+        padding: 16px 18px;
+    }
+    
+    /* ---- MOBILE ACCORDION for dashboard cards ---- */
+    .dashboard-grid .card > .card-header {
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
-        position: relative;
         user-select: none;
-        min-height: 52px;
+        min-height: 54px;
         transition: background 150ms ease;
+        display: flex;
+        align-items: center;
     }
     
     .dashboard-grid .card > .card-header:active {
-        background: rgba(41, 98, 255, 0.12);
+        background: rgba(41, 98, 255, 0.1);
     }
     
-    .dashboard-grid .card > .card-header h3 {
-        font-size: 0.85rem;
-        letter-spacing: 0.06em;
-    }
-    
-    /* Chevron indicator for mobile accordion */
+    /* Chevron indicator */
     .dashboard-grid .card > .card-header::after {
         content: '';
-        width: 8px;
-        height: 8px;
+        width: 9px;
+        height: 9px;
         border-right: 2px solid var(--muted);
         border-bottom: 2px solid var(--muted);
         transform: rotate(45deg);
@@ -860,20 +1000,36 @@ body.app-mode {
         transform: rotate(-45deg);
     }
     
-    /* Collapsed card body on mobile */
     .dashboard-grid .card > .card-body.m-hidden {
         display: none;
     }
     
-    .card-header {
-        padding: 14px 16px;
+    /* Agent mode card — always visible, first card */
+    .dashboard-grid .agent-card {
+        order: -1;
     }
     
-    .card-body {
-        padding: 14px 16px;
+    /* ---- SWITCHER buttons (agent modes etc) ---- */
+    .switcher {
+        gap: 8px;
     }
     
-    /* Table scrollable */
+    .switcher-button {
+        padding: 12px 16px;
+        font-size: 0.85rem;
+        min-height: 48px;
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    
+    /* ---- STACK LIST items ---- */
+    .stack-item {
+        padding: 14px 16px;
+        font-size: 0.9rem;
+        border-radius: 10px;
+    }
+    
+    /* ---- TABLE ---- */
     .table-wrap {
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
@@ -883,7 +1039,7 @@ body.app-mode {
         min-width: 800px;
     }
     
-    /* Chart adjustments */
+    /* ---- CHART ---- */
     .chart-stage {
         min-height: 350px;
     }
@@ -892,40 +1048,75 @@ body.app-mode {
         height: 330px;
     }
     
-    /* Better switcher on mobile */
-    .switcher {
-        gap: 6px;
+    /* ---- WATCHLIST rows more spacious ---- */
+    .watchlist-row {
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 0.9rem;
     }
     
-    .switcher-button {
-        padding: 10px 14px;
-        font-size: 0.8rem;
-        min-height: 44px;
+    .watchlist-symbol {
+        font-size: 0.95rem;
     }
     
-    /* Stack list items bigger tap targets */
-    .stack-item {
-        padding: 14px 16px;
+    /* ---- TRADE RANKING rows ---- */
+    .trade-ranking-row {
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 0.85rem;
+    }
+    
+    /* ---- QUICK SUMMARY ---- */
+    .quick-summary-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 10px;
+    }
+    
+    .quick-card {
+        padding: 14px;
+        border-radius: 10px;
+    }
+    
+    .quick-card span {
+        font-size: 0.75rem;
+    }
+    
+    .quick-card strong {
+        font-size: 1.05rem;
+    }
+    
+    /* ---- AI message ---- */
+    .ai-message {
+        font-size: 1rem;
+        line-height: 1.7;
     }
 }
 
 /* Extra small screens (iPhone SE, etc) */
 @media (max-width: 380px) {
     .header-left h1 {
-        font-size: 0.95rem;
+        font-size: 1.05rem;
     }
     
-    .metric-tile {
-        min-width: 90px;
-        padding: 7px 10px;
+    .mobile-hero {
+        padding: 16px;
     }
     
-    .metric-label {
-        font-size: 0.58rem;
+    .mobile-hero-value {
+        font-size: 1.7rem;
     }
     
-    .metric-value {
-        font-size: 0.88rem;
+    .mobile-hero-stat strong {
+        font-size: 1rem;
+    }
+    
+    .mobile-hero-row {
+        gap: 8px;
+    }
+    
+    .mobile-action-btn {
+        padding: 12px 12px;
+        font-size: 0.82rem;
     }
     
     .mobile-nav-item {
@@ -938,7 +1129,7 @@ body.app-mode {
     }
     
     .mobile-nav-item span {
-        font-size: 0.6rem;
+        font-size: 0.55rem;
     }
 }
 
@@ -952,12 +1143,12 @@ body.app-mode {
     
     .app-header {
         padding-top: env(safe-area-inset-top);
-        height: calc(var(--header-height) + env(safe-area-inset-top));
+        height: calc(52px + env(safe-area-inset-top));
     }
     
     @media (max-width: 768px) {
         .view-content {
-            padding-bottom: calc(12px + 72px + env(safe-area-inset-bottom));
+            padding-bottom: calc(16px + 68px + env(safe-area-inset-bottom));
         }
     }
 }
@@ -970,8 +1161,8 @@ body.app-mode {
     }
     
     .app-main {
-        height: calc(100vh - var(--header-height) - 70px);
-        height: calc(-webkit-fill-available - var(--header-height) - 70px);
+        height: calc(100vh - 52px - 68px);
+        height: calc(-webkit-fill-available - 52px - 68px);
     }
 }
 

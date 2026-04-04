@@ -624,6 +624,19 @@ function paintWallet(wallet) {
     document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
     document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
     paintQuickSummary(wallet);
+    
+    // Mobile hero card update
+    const heroBalance = document.getElementById("mobile-hero-balance");
+    if (heroBalance) {
+        heroBalance.textContent = formatQuote(wallet.realized_profit);
+        heroBalance.style.color = wallet.realized_profit >= 0 ? "var(--positive)" : "var(--negative)";
+    }
+    const heroProfit = document.getElementById("mobile-hero-profit");
+    if (heroProfit) heroProfit.textContent = formatQuote(wallet.gross_profit);
+    const heroLoss = document.getElementById("mobile-hero-loss");
+    if (heroLoss) heroLoss.textContent = formatQuote(wallet.gross_loss);
+    const heroWinrate = document.getElementById("mobile-hero-winrate");
+    if (heroWinrate) heroWinrate.textContent = `${percentFormatter.format(wallet.win_rate)}%`;
 }
 
 function paintModeStrip(systemStatus, config, wallet) {
@@ -2574,15 +2587,16 @@ function initMobileAccordion() {
         const body = card.querySelector(":scope > .card-body");
         if (!header || !body) return;
         
-        // Remove old listener by cloning
-        if (header._mobileClone) return;
-        
         if (isMobile) {
             if (!header._mobileReady) {
                 header._mobileReady = true;
-                // Start collapsed on mobile
-                header.classList.add("m-collapsed");
-                body.classList.add("m-hidden");
+                
+                // Agent card starts OPEN, rest collapsed
+                const isAgentCard = card.classList.contains("agent-card");
+                if (!isAgentCard) {
+                    header.classList.add("m-collapsed");
+                    body.classList.add("m-hidden");
+                }
                 
                 header.addEventListener("click", function mobileTap(e) {
                     if (window.innerWidth > 768) return;
@@ -2632,6 +2646,20 @@ document.getElementById("scheduler-button").addEventListener("click", async () =
         setStatus(error.message);
     }
 });
+
+// Mobile action buttons (cycle + scheduler duplicates for mobile)
+const mobileCycleBtn = document.getElementById("mobile-cycle-btn");
+if (mobileCycleBtn) {
+    mobileCycleBtn.addEventListener("click", async () => {
+        try { await runCycle(); } catch(e) { setStatus(e.message); }
+    });
+}
+const mobileSchedBtn = document.getElementById("mobile-scheduler-btn");
+if (mobileSchedBtn) {
+    mobileSchedBtn.addEventListener("click", async () => {
+        try { await toggleScheduler(); } catch(e) { setStatus(e.message); }
+    });
+}
 
 document.getElementById("reset-paper-button").addEventListener("click", async () => {
     try {
