@@ -298,7 +298,9 @@ async function addApiKey(apiKey, apiSecret, isTestnet, permissions) {
             })
         });
         
-        const data = await response.json();
+        const text = await response.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { detail: text || `Błąd serwera (${response.status})` }; }
         
         if (!response.ok) {
             throw new Error(data.detail || 'Błąd dodawania klucza');
@@ -331,7 +333,9 @@ async function testApiKey(keyId) {
     try {
         setStatus('Testowanie połączenia z Binance...');
         const response = await fetch(`/api/binance/test?key_id=${keyId}`);
-        const data = await response.json();
+        const text = await response.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { detail: text || `Błąd serwera (${response.status})` }; }
         
         if (data.success) {
             alert('✅ Połączenie z Binance działa poprawnie!\n' + (data.message || 'OK'));
@@ -364,8 +368,11 @@ async function loadBinanceBalances(keyId) {
             fetch(`/api/binance/portfolio?key_id=${keyId}`)
         ]);
         
-        const balancesData = await balancesRes.json();
-        const portfolioData = await portfolioRes.json();
+        const balText = await balancesRes.text();
+        const portText = await portfolioRes.text();
+        let balancesData, portfolioData;
+        try { balancesData = JSON.parse(balText); } catch { balancesData = { detail: balText || `Błąd (${balancesRes.status})` }; }
+        try { portfolioData = JSON.parse(portText); } catch { portfolioData = { detail: portText || `Błąd (${portfolioRes.status})` }; }
 
         if (!balancesRes.ok) {
             throw new Error(balancesData.detail || 'Nie udało się pobrać balansów Binance');
