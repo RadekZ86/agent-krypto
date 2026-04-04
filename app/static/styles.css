@@ -887,3 +887,301 @@ th {
         font-size: 0.85rem;
     }
 }
+
+/* ==================== */
+/* MOBILE PHONE STYLES  */
+/* ==================== */
+
+@media (max-width: 480px) {
+    .shell {
+        width: 100%;
+        margin: 8px auto 20px;
+        gap: 12px;
+    }
+
+    .panel {
+        border-radius: 18px;
+    }
+
+    .panel:not(.hero):not(.insight-panel) {
+        padding: 16px;
+    }
+
+    .hero {
+        padding: 16px;
+        border-radius: 0 0 18px 18px;
+        margin-top: -8px;
+    }
+
+    h1 {
+        font-size: 1.8rem;
+    }
+
+    .hero-copy {
+        font-size: 0.9rem;
+    }
+
+    .hero-actions {
+        gap: 8px;
+    }
+
+    .hero-actions button {
+        flex: 1 1 calc(50% - 4px);
+        padding: 10px 14px;
+        font-size: 0.82rem;
+    }
+
+    .menu-toggle-button {
+        top: 12px;
+        left: 12px;
+        padding: 10px 14px;
+        font-size: 0.8rem;
+    }
+
+    .page-menu {
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        border-radius: 0;
+        padding: 16px;
+    }
+
+    .page-menu-links a {
+        padding: 14px 16px;
+        font-size: 1rem;
+    }
+
+    .mode-strip {
+        padding: 14px 16px;
+        gap: 12px;
+    }
+
+    .status-pill {
+        padding: 6px 10px;
+        font-size: 0.72rem;
+    }
+
+    .metric-card {
+        padding: 16px;
+    }
+
+    .metric-card span {
+        font-size: 0.75rem;
+    }
+
+    .metric-card strong {
+        font-size: 1.2rem;
+    }
+
+    .section-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .section-head h2 {
+        font-size: 0.9rem;
+    }
+
+    .switcher {
+        gap: 6px;
+    }
+
+    .switcher-button {
+        padding: 8px 12px;
+        font-size: 0.75rem;
+    }
+
+    .stack-item {
+        padding: 14px;
+    }
+
+    .chart-stage {
+        min-height: 400px;
+        padding: 6px;
+    }
+
+    .chart-svg {
+        height: 380px;
+    }
+
+    .chart-toolbar {
+        gap: 6px;
+    }
+
+    .chart-toolbar button {
+        padding: 8px 12px;
+        font-size: 0.75rem;
+    }
+
+    table {
+        font-size: 0.8rem;
+    }
+
+    th, td {
+        padding: 10px 6px;
+    }
+
+    .disclosure-summary {
+        padding: 16px;
+    }
+
+    .disclosure-body {
+        padding: 0 16px 16px;
+    }
+
+    .ai-message {
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+
+    .quick-card {
+        padding: 14px;
+    }
+
+    .quick-card span {
+        font-size: 0.7rem;
+    }
+
+    .quick-card strong {
+        font-size: 1rem;
+    }
+
+    .badge {
+        padding: 5px 8px;
+        font-size: 0.7rem;
+    }
+}
+
+/* PWA Standalone Mode Adjustments */
+@media (display-mode: standalone) {
+    body {
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        padding-left: env(safe-area-inset-left);
+        padding-right: env(safe-area-inset-right);
+    }
+
+    .menu-toggle-button {
+        top: calc(12px + env(safe-area-inset-top));
+    }
+
+    .hero {
+        margin-top: 0;
+        padding-top: calc(16px + env(safe-area-inset-top));
+    }
+}
+
+/* Touch-friendly buttons */
+@media (pointer: coarse) {
+    button {
+        min-height: 44px;
+    }
+
+    .switcher-button {
+        min-height: 40px;
+    }
+
+    .page-menu-links a {
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+    }
+}
+
+/* Prevent text selection on mobile for better UX */
+@media (max-width: 720px) {
+    .metric-card,
+    .status-pill,
+    .badge,
+    .switcher-button {
+        -webkit-user-select: none;
+        user-select: none;
+    }
+}
+
+/* Dark mode adjustments for OLED screens */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #000000;
+    }
+}
+
+/* Landscape mobile */
+@media (max-height: 500px) and (orientation: landscape) {
+    .hero {
+        padding: 12px 16px;
+    }
+
+    h1 {
+        font-size: 1.5rem;
+    }
+
+    .hero-copy {
+        display: none;
+    }
+
+    .chart-stage {
+        min-height: 280px;
+    }
+
+    .chart-svg {
+        height: 260px;
+    }
+}
+
+/* Pull to refresh indicator placeholder */
+.pull-to-refresh {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel);
+    transform: translateY(-100%);
+    transition: transform 200ms ease;
+    z-index: 100;
+}
+
+.pull-to-refresh.visible {
+    transform: translateY(0);
+}
+
+/* Install PWA prompt */
+.install-prompt {
+    position: fixed;
+    bottom: 20px;
+    left: 16px;
+    right: 16px;
+    padding: 16px;
+    background: var(--panel-strong);
+    border: 1px solid var(--accent);
+    border-radius: 16px;
+    display: none;
+    gap: 12px;
+    z-index: 50;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.install-prompt.visible {
+    display: grid;
+}
+
+.install-prompt-text {
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.install-prompt-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.install-prompt-actions button {
+    flex: 1;
+}

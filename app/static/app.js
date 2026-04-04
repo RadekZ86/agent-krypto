@@ -1886,3 +1886,134 @@ renderDashboardWithRetry().catch((error) => setStatus(error.message));
 window.setInterval(() => {
     updateAgentPulseStrip();
 }, 1000);
+
+// ==================== PWA Install Prompt ====================
+
+let deferredPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    showInstallPrompt();
+});
+
+function showInstallPrompt() {
+    // Check if already installed or dismissed
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+        return;
+    }
+    
+    const dismissed = localStorage.getItem('pwa-install-dismissed');
+    if (dismissed && Date.now() - parseInt(dismissed) < 7 * 24 * 60 * 60 * 1000) {
+        return; // Don't show for 7 days after dismissal
+    }
+    
+    // Create prompt if doesn't exist
+    let prompt = document.querySelector('.install-prompt');
+    if (!prompt) {
+        prompt = document.createElement('div');
+        prompt.className = 'install-prompt visible';
+        prompt.innerHTML = `
+            <div class="install-prompt-text">
+                <strong>Zainstaluj Agent Krypto</strong><br>
+                Dodaj aplikacje do ekranu glownego dla szybkiego dostepu.
+            </div>
+            <div class="install-prompt-actions">
+                <button class="ghost-button" id="install-dismiss">Pozniej</button>
+                <button class="primary-button" id="install-accept">Instaluj</button>
+            </div>
+        `;
+        document.body.appendChild(prompt);
+        
+        document.getElementById('install-dismiss').addEventListener('click', () => {
+            prompt.classList.remove('visible');
+            localStorage.setItem('pwa-install-dismissed', Date.now().toString());
+        });
+        
+        document.getElementById('install-accept').addEventListener('click', async () => {
+            prompt.classList.remove('visible');
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                console.log('PWA install:', outcome);
+                deferredPrompt = null;
+            }
+        });
+    } else {
+        prompt.classList.add('visible');
+    }
+}
+
+// Handle app installed event
+window.addEventListener('appinstalled', () => {
+    console.log('PWA installed successfully');
+    const prompt = document.querySelector('.install-prompt');
+    if (prompt) {
+        prompt.classList.remove('visible');
+    }
+    deferredPrompt = null;
+});
+
+// ==================== Mobile Touch Enhancements ====================
+
+// Prevent double-tap zoom on buttons
+document.addEventListener('touchend', (e) => {
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+        e.preventDefault();
+        e.target.click();
+    }
+}, { passive: false });
+
+// Pull to refresh (simple implementation)
+let touchStartY = 0;
+let isPulling = false;
+
+document.addEventListener('touchstart', (e) => {
+    if (window.scrollY === 0) {
+        touchStartY = e.touches[0].clientY;
+    }
+}, { passive: true });
+
+document.addEventListener('touchmove', (e) => {
+    if (window.scrollY === 0 && e.touches[0].clientY > touchStartY + 60) {
+        isPulling = true;
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', async () => {
+    if (isPulling && window.scrollY === 0) {
+        isPulling = false;
+        // Trigger refresh
+        try {
+            await renderDashboardWithRetry(1, 0);
+            setStatus('Odswiezono');
+        } catch (error) {
+            setStatus('Blad odswiezania');
+        }
+    }
+}, { passive: true });
+
+// Vibration feedback on important actions (if supported)
+function vibrate(pattern = 10) {
+    if ('vibrate' in navigator) {
+        navigator.vibrate(pattern);
+    }
+}
+
+// Add vibration to action buttons
+['run-cycle-button', 'ai-button', 'reset-paper-button'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) {
+        btn.addEventListener('click', () => vibrate(15));
+    }
+});
+
+// Online/offline indicator
+window.addEventListener('online', () => {
+    setStatus('Polaczony z siecia');
+    renderDashboardWithRetry(1, 0).catch(() => {});
+});
+
+window.addEventListener('offline', () => {
+    setStatus('Brak polaczenia - tryb offline');
+});
