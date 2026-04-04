@@ -91,6 +91,7 @@ def serialize_user(user: User) -> dict[str, object]:
         "id": user.id,
         "email": user.email,
         "username": user.username,
+        "trading_mode": getattr(user, "trading_mode", "PAPER"),
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -349,9 +350,10 @@ def _build_dashboard_payload(
             func.coalesce(func.sum(OpenAIUsageLog.estimated_cost_usd), 0.0),
         )
     ).one()
+    user_trading_mode = current_user.trading_mode if current_user and hasattr(current_user, 'trading_mode') else settings.trading_mode
     system_status = {
         "scheduler": scheduler_service.status(),
-        "trading_mode": settings.trading_mode,
+        "trading_mode": user_trading_mode,
         "learning_mode": settings.learning_mode,
         "agent_mode": active_profile["id"],
         "agent_mode_label": active_profile["label"],
@@ -444,7 +446,7 @@ def _build_dashboard_payload(
             "start_balance": settings.starting_balance_quote,
             "fee_rate": settings.fee_rate,
             "slippage": settings.slippage,
-            "trading_mode": settings.trading_mode,
+            "trading_mode": user_trading_mode,
             "learning_mode": settings.learning_mode,
             "preferred_trade_quotes": settings.preferred_trade_quotes,
             "dashboard_refresh_seconds": settings.dashboard_refresh_seconds,
@@ -537,6 +539,50 @@ async def get_me(session_token: Optional[str] = Cookie(None)) -> JSONResponse:
         "authenticated": True,
         "user": serialize_user(user),
     })
+
+
+@app.post("/api/user/trading-mode")
+async def set_trading_mode(request: Request, user: User = Depends(require_auth)) -> JSONResponse:
+    """Toggle user's trading mode between PAPER and LIVE."""
+    body = await request.json()
+    mode = str(body.get("mode", "PAPER")).upper()
+    if mode not in ("PAPER", "LIVE"):
+        return JSONResponse({"ok": False, "error": "Tryb musi byc PAPER lub LIVE"}, status_code=400)
+
+    with SessionLocal() as session:
+        db_user = session.get(User, user.id)
+        if db_user is None:
+            return JSONResponse({"ok": False, "error": "Nie znaleziono uzytkownika"}, status_code=404)
+
+        if mode == "LIVE":
+            keys = api_key_service.get_user_api_keys(session, user.id)
+            trade_key = next(
+                (k for k in keys if k.is_active and not k.is_testnet),
+                None,
+            )
+            if trade_key is None:
+                return JSONResponse(
+                    {"ok": False, "error": "Brak klucza API Binance. Dodaj klucz w Ustawieniach."},
+                    status_code=400,
+                )
+            # Auto-test Binance permissions and upgrade local record
+            api_secret = api_key_service.get_decrypted_secret(trade_key)
+            if api_secret:
+                client = binance_service.get_client(trade_key.api_key, api_secret, trade_key.is_testnet)
+                account = client.get_account()
+                if isinstance(account, dict) and account.get("canTrade"):
+                    trade_key.permissions = "trade"
+                    session.flush()
+                else:
+                    return JSONResponse(
+                        {"ok": False, "error": "Klucz API nie ma uprawnien do handlu. Wlacz 'Handel Spot' na Binance."},
+                        status_code=400,
+                    )
+
+        db_user.trading_mode = mode
+        session.commit()
+
+    return JSONResponse({"ok": True, "trading_mode": mode})
 
 
 # ============== API KEY MANAGEMENT ==============

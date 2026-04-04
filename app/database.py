@@ -34,3 +34,14 @@ def init_db() -> None:
     from app import models
 
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight column migrations for SQLite
+    import sqlalchemy
+
+    with engine.connect() as conn:
+        inspector = sqlalchemy.inspect(engine)
+        if "users" in inspector.get_table_names():
+            columns = [col["name"] for col in inspector.get_columns("users")]
+            if "trading_mode" not in columns:
+                conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN trading_mode VARCHAR(16) DEFAULT 'PAPER'"))
+                conn.commit()

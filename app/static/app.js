@@ -78,6 +78,10 @@ function updateUserMenu() {
                     <span class="user-email">${currentUser.email || ''}</span>
                 </div>
                 <div class="dropdown-divider"></div>
+                <button class="dropdown-item" data-action="toggle-trading-mode">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    <span id="trading-mode-label">${currentUser.trading_mode === "LIVE" ? "Przelacz na PAPER" : "Przelacz na LIVE"}</span>
+                </button>
                 <button class="dropdown-item" data-action="api-keys">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
                     Klucze API
@@ -121,6 +125,8 @@ function rebindDropdownHandlers() {
                 switchView('settings');
             } else if (action === 'login') {
                 showLoginScreen();
+            } else if (action === 'toggle-trading-mode') {
+                handleToggleTradingMode();
             }
             userDropdown.classList.add('hidden');
         });
@@ -185,6 +191,33 @@ async function handleLogout() {
     userApiKeys = [];
     updateUserMenu();
     showLoginScreen();
+}
+
+async function handleToggleTradingMode() {
+    if (!currentUser) return;
+    const newMode = currentUser.trading_mode === "LIVE" ? "PAPER" : "LIVE";
+    const confirmMsg = newMode === "LIVE"
+        ? "UWAGA: Przelaczasz na tryb LIVE. Agent bedzie skladal PRAWDZIWE zlecenia na Twoim koncie Binance. Kontynuowac?"
+        : "Przelaczasz na tryb PAPER. Agent bedzie handlowal tylko wirtualnie.";
+    if (!confirm(confirmMsg)) return;
+    try {
+        const response = await fetch('/api/user/trading-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: newMode }),
+        });
+        const data = await response.json();
+        if (data.ok) {
+            currentUser.trading_mode = data.trading_mode;
+            updateUserMenu();
+            renderDashboard();
+            setStatus(`Tryb zmieniony na ${data.trading_mode}`);
+        } else {
+            alert(data.error || "Blad zmiany trybu");
+        }
+    } catch (error) {
+        alert("Blad polaczenia: " + error.message);
+    }
 }
 
 // ==================== API KEYS FUNCTIONS ====================
