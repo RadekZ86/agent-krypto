@@ -49,7 +49,7 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
             testnet=trade_key.is_testnet,
         )
 
-        pair = settings.binance_symbols.get(symbol, f"{symbol}USDT")
+        pair = settings.binance_symbols.get(symbol, f"{symbol}{settings.exchange_quote_currency}")
         try:
             if action == "BUY":
                 allocation = settings.allocation_quote.get(symbol, 40.0)

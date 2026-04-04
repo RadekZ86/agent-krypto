@@ -404,7 +404,7 @@ def _build_dashboard_payload(
             )
             if user_trading_mode == "LIVE":
                 try:
-                    portfolio = client.get_portfolio_value(settings.quote_currency)
+                    portfolio = client.get_portfolio_value(settings.exchange_quote_currency)
                     if isinstance(portfolio, dict) and "error" not in portfolio:
                         binance_wallet = portfolio
                 except Exception:
@@ -462,7 +462,7 @@ def _build_dashboard_payload(
             "start_balance_display_pln": settings.starting_balance_display_pln,
             "display_fx_rates": {
                 f"{settings.quote_currency.upper()}_{display_currency}": usd_to_display_rate,
-                f"USDT_{display_currency}": usd_to_display_rate,
+                f"{settings.exchange_quote_currency}_{display_currency}": usd_to_display_rate,
             },
             "display_rate_source": rate_source,
             "tracked_symbols": settings.tracked_symbols,

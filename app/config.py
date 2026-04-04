@@ -150,7 +150,8 @@ COINGECKO_IDS = {
 }
 
 
-BINANCE_SYMBOLS = {symbol: f"{symbol}USDT" for symbol in DEFAULT_SYMBOLS}
+_EXCHANGE_QUOTE = os.getenv("AGENT_KRYPTO_EXCHANGE_QUOTE", "USDT").upper()
+BINANCE_SYMBOLS = {symbol: f"{symbol}{_EXCHANGE_QUOTE}" for symbol in DEFAULT_SYMBOLS}
 
 
 COINBASE_PRODUCTS = {
