@@ -18,6 +18,438 @@ let chartHoverState = null;
 let chartHoverHandlersBound = false;
 let dashboardRefreshTimerId = null;
 
+// ==================== AUTH STATE ====================
+let currentUser = null;
+let userApiKeys = [];
+
+// ==================== AUTH FUNCTIONS ====================
+
+async function checkAuthStatus() {
+    try {
+        const response = await fetch('/api/auth/me');
+        const data = await response.json();
+        if (data.authenticated && data.user) {
+            currentUser = data.user;
+            showApp();
+            updateUserMenu();
+            loadUserApiKeys();
+        } else {
+            currentUser = null;
+            showLoginScreen();
+        }
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        showLoginScreen();
+    }
+}
+
+function showLoginScreen() {
+    const loginScreen = document.getElementById('login-screen');
+    if (loginScreen) {
+        loginScreen.classList.remove('hidden');
+    }
+}
+
+function hideLoginScreen() {
+    const loginScreen = document.getElementById('login-screen');
+    if (loginScreen) {
+        loginScreen.classList.add('hidden');
+    }
+}
+
+function showApp() {
+    hideLoginScreen();
+}
+
+function updateUserMenu() {
+    const userMenuName = document.getElementById('user-menu-name');
+    const userEmail = document.querySelector('.user-email');
+    
+    if (currentUser) {
+        if (userMenuName) userMenuName.textContent = currentUser.username || 'Konto';
+        if (userEmail) userEmail.textContent = currentUser.email || '';
+    } else {
+        if (userMenuName) userMenuName.textContent = 'Konto';
+        if (userEmail) userEmail.textContent = '-';
+    }
+}
+
+async function handleLogin(email, password) {
+    try {
+        const response = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Błąd logowania');
+        }
+        
+        currentUser = data.user;
+        showApp();
+        updateUserMenu();
+        loadUserApiKeys();
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+async function handleRegister(username, email, password) {
+    try {
+        const response = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, email, password })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Błąd rejestracji');
+        }
+        
+        currentUser = data.user;
+        showApp();
+        updateUserMenu();
+        loadUserApiKeys();
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+async function handleLogout() {
+    try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (error) {
+        console.error('Logout error:', error);
+    }
+    currentUser = null;
+    userApiKeys = [];
+    updateUserMenu();
+    showLoginScreen();
+}
+
+// ==================== API KEYS FUNCTIONS ====================
+
+async function loadUserApiKeys() {
+    if (!currentUser) {
+        userApiKeys = [];
+        renderApiKeysList();
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/keys');
+        if (response.ok) {
+            const data = await response.json();
+            userApiKeys = data.keys || [];
+            renderApiKeysList();
+            updateBinanceKeySelector();
+        }
+    } catch (error) {
+        console.error('Failed to load API keys:', error);
+    }
+}
+
+function renderApiKeysList() {
+    const container = document.getElementById('api-keys-list');
+    if (!container) return;
+    
+    if (!currentUser) {
+        container.innerHTML = '<p class="empty-state">Zaloguj się aby zarządzać kluczami API</p>';
+        return;
+    }
+    
+    if (userApiKeys.length === 0) {
+        container.innerHTML = '<p class="empty-state">Brak kluczy API. Dodaj klucz aby połączyć z Binance.</p>';
+        return;
+    }
+    
+    container.innerHTML = userApiKeys.map(key => `
+        <div class="api-key-item" data-key-id="${key.id}">
+            <div class="api-key-info">
+                <span class="api-key-name">${key.exchange.toUpperCase()}</span>
+                <span class="api-key-meta">
+                    <span>${key.api_key}</span>
+                    <span>${key.is_testnet ? '🧪 Testnet' : '🌐 Mainnet'}</span>
+                    <span>${key.permissions}</span>
+                </span>
+            </div>
+            <div class="api-key-actions">
+                <button class="btn-test" onclick="testApiKey(${key.id})">Test</button>
+                <button class="btn-delete" onclick="deleteApiKey(${key.id})">Usuń</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateBinanceKeySelector() {
+    const selector = document.getElementById('binance-key-selector');
+    if (!selector) return;
+    
+    selector.innerHTML = '<option value="">Wybierz klucz API</option>' + 
+        userApiKeys.map(key => `
+            <option value="${key.id}">${key.exchange.toUpperCase()} - ${key.api_key} ${key.is_testnet ? '(Testnet)' : ''}</option>
+        `).join('');
+}
+
+async function addApiKey(apiKey, apiSecret, isTestnet, permissions) {
+    try {
+        const response = await fetch('/api/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                exchange: 'binance',
+                api_key: apiKey,
+                api_secret: apiSecret,
+                is_testnet: isTestnet,
+                permissions: permissions
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.detail || 'Błąd dodawania klucza');
+        }
+        
+        await loadUserApiKeys();
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+async function deleteApiKey(keyId) {
+    if (!confirm('Czy na pewno chcesz usunąć ten klucz API?')) return;
+    
+    try {
+        const response = await fetch(`/api/keys/${keyId}`, { method: 'DELETE' });
+        if (response.ok) {
+            await loadUserApiKeys();
+        } else {
+            const data = await response.json();
+            alert('Błąd: ' + (data.detail || 'Nie udało się usunąć klucza'));
+        }
+    } catch (error) {
+        alert('Błąd: ' + error.message);
+    }
+}
+
+async function testApiKey(keyId) {
+    try {
+        setStatus('Testowanie połączenia z Binance...');
+        const response = await fetch(`/api/binance/test?key_id=${keyId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            alert('✅ Połączenie z Binance działa poprawnie!\nCzas serwera: ' + (data.server_time || 'OK'));
+            setStatus('Test połączenia: OK');
+        } else {
+            alert('❌ Błąd połączenia: ' + (data.error || 'Nieznany błąd'));
+            setStatus('Test połączenia: BŁĄD');
+        }
+    } catch (error) {
+        alert('❌ Błąd: ' + error.message);
+        setStatus('Test połączenia: BŁĄD');
+    }
+}
+
+async function loadBinanceBalances(keyId) {
+    const balancesContainer = document.getElementById('binance-balances');
+    const portfolioDisplay = document.getElementById('binance-portfolio-value');
+    
+    if (!keyId) {
+        if (balancesContainer) balancesContainer.innerHTML = '<p class="empty-state">Wybierz klucz API aby zobaczyć balans</p>';
+        if (portfolioDisplay) portfolioDisplay.classList.add('hidden');
+        return;
+    }
+    
+    try {
+        if (balancesContainer) balancesContainer.innerHTML = '<p class="empty-state">Ładowanie...</p>';
+        
+        const [balancesRes, portfolioRes] = await Promise.all([
+            fetch(`/api/binance/balances?key_id=${keyId}`),
+            fetch(`/api/binance/portfolio?key_id=${keyId}`)
+        ]);
+        
+        const balancesData = await balancesRes.json();
+        const portfolioData = await portfolioRes.json();
+        
+        if (balancesContainer && balancesData.balances) {
+            if (balancesData.balances.length === 0) {
+                balancesContainer.innerHTML = '<p class="empty-state">Brak środków na koncie</p>';
+            } else {
+                balancesContainer.innerHTML = balancesData.balances.map(b => `
+                    <div class="balance-item">
+                        <span class="balance-asset">${b.asset}</span>
+                        <span class="balance-amount">${parseFloat(b.free).toFixed(8)}</span>
+                    </div>
+                `).join('');
+            }
+        }
+        
+        if (portfolioDisplay && portfolioData.total_value_usdt !== undefined) {
+            portfolioDisplay.classList.remove('hidden');
+            portfolioDisplay.querySelector('.value').textContent = 
+                `$${parseFloat(portfolioData.total_value_usdt).toFixed(2)} USDT`;
+        }
+    } catch (error) {
+        if (balancesContainer) balancesContainer.innerHTML = `<p class="empty-state">Błąd: ${error.message}</p>`;
+    }
+}
+
+// Initialize auth UI handlers
+function initAuthUI() {
+    // Login form
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const showRegisterLink = document.getElementById('show-register');
+    const showLoginLink = document.getElementById('show-login');
+    const skipLoginBtn = document.getElementById('skip-login');
+    const authError = document.getElementById('auth-error');
+    
+    function showError(message) {
+        if (authError) {
+            authError.textContent = message;
+            authError.classList.remove('hidden');
+        }
+    }
+    
+    function hideError() {
+        if (authError) authError.classList.add('hidden');
+    }
+    
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+            
+            const result = await handleLogin(email, password);
+            if (!result.success) {
+                showError(result.error);
+            }
+        });
+    }
+    
+    if (registerForm) {
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+            const username = document.getElementById('register-username').value;
+            const email = document.getElementById('register-email').value;
+            const password = document.getElementById('register-password').value;
+            
+            const result = await handleRegister(username, email, password);
+            if (!result.success) {
+                showError(result.error);
+            }
+        });
+    }
+    
+    if (showRegisterLink) {
+        showRegisterLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            hideError();
+            loginForm?.classList.add('hidden');
+            registerForm?.classList.remove('hidden');
+        });
+    }
+    
+    if (showLoginLink) {
+        showLoginLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            hideError();
+            registerForm?.classList.add('hidden');
+            loginForm?.classList.remove('hidden');
+        });
+    }
+    
+    if (skipLoginBtn) {
+        skipLoginBtn.addEventListener('click', () => {
+            hideLoginScreen();
+        });
+    }
+    
+    // User menu dropdown
+    const userMenuBtn = document.getElementById('user-menu-btn');
+    const userDropdown = document.getElementById('user-dropdown');
+    
+    if (userMenuBtn && userDropdown) {
+        userMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            userDropdown.classList.toggle('hidden');
+        });
+        
+        document.addEventListener('click', () => {
+            userDropdown.classList.add('hidden');
+        });
+        
+        userDropdown.querySelectorAll('.dropdown-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const action = item.dataset.action;
+                if (action === 'logout') {
+                    handleLogout();
+                } else if (action === 'api-keys') {
+                    switchView('settings');
+                }
+                userDropdown.classList.add('hidden');
+            });
+        });
+    }
+    
+    // API Key form
+    const addApiKeyBtn = document.getElementById('add-api-key-btn');
+    const addApiKeyForm = document.getElementById('add-api-key-form');
+    const cancelApiKeyBtn = document.getElementById('cancel-api-key');
+    
+    if (addApiKeyBtn && addApiKeyForm) {
+        addApiKeyBtn.addEventListener('click', () => {
+            addApiKeyForm.classList.toggle('hidden');
+        });
+    }
+    
+    if (cancelApiKeyBtn && addApiKeyForm) {
+        cancelApiKeyBtn.addEventListener('click', () => {
+            addApiKeyForm.classList.add('hidden');
+            addApiKeyForm.reset();
+        });
+    }
+    
+    if (addApiKeyForm) {
+        addApiKeyForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const apiKey = document.getElementById('api-key-input').value;
+            const apiSecret = document.getElementById('api-secret-input').value;
+            const isTestnet = document.getElementById('api-testnet').checked;
+            const permissions = document.getElementById('api-permissions').value;
+            
+            const result = await addApiKey(apiKey, apiSecret, isTestnet, permissions);
+            if (result.success) {
+                addApiKeyForm.classList.add('hidden');
+                addApiKeyForm.reset();
+            } else {
+                alert('Błąd: ' + result.error);
+            }
+        });
+    }
+    
+    // Binance key selector
+    const binanceKeySelector = document.getElementById('binance-key-selector');
+    if (binanceKeySelector) {
+        binanceKeySelector.addEventListener('change', (e) => {
+            loadBinanceBalances(e.target.value);
+        });
+    }
+}
+
 const chartTabs = [
     { id: "overview", label: "Wszystko" },
     { id: "price", label: "Cena" },
@@ -1979,6 +2411,8 @@ if (aiRefreshBtn) {
 
 initPageMenu();
 initViewSwitching();
+initAuthUI();
+checkAuthStatus();
 renderDashboardWithRetry().catch((error) => setStatus(error.message));
 window.setInterval(() => {
     updateAgentPulseStrip();

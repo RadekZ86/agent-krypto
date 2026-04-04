@@ -1,11 +1,71 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
+import secrets
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+class User(Base):
+    """User account for multi-user support."""
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(128))
+    salt: Mapped[str] = mapped_column(String(32))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    
+    api_keys: Mapped[list[UserAPIKey]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    sessions: Mapped[list[UserSession]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+    def set_password(self, password: str) -> None:
+        self.salt = secrets.token_hex(16)
+        self.password_hash = hashlib.sha256((password + self.salt).encode()).hexdigest()
+    
+    def check_password(self, password: str) -> bool:
+        return self.password_hash == hashlib.sha256((password + self.salt).encode()).hexdigest()
+
+
+class UserAPIKey(Base):
+    """Binance API keys per user."""
+    __tablename__ = "user_api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    exchange: Mapped[str] = mapped_column(String(32), default="binance")
+    label: Mapped[str] = mapped_column(String(64))  # e.g. "Main Account", "Trading Bot"
+    api_key: Mapped[str] = mapped_column(String(128))
+    api_secret_encrypted: Mapped[str] = mapped_column(String(256))  # Encrypted
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_testnet: Mapped[bool] = mapped_column(Boolean, default=False)
+    permissions: Mapped[str] = mapped_column(String(64), default="read")  # read, trade, withdraw
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    
+    user: Mapped[User] = relationship(back_populates="api_keys")
+
+
+class UserSession(Base):
+    """Active user sessions."""
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class MarketData(Base):

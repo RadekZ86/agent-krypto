@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Cookie
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import desc, func, select
 
 from app.config import settings
 from app.database import SessionLocal, init_db
-from app.models import Decision, FeatureSnapshot, MarketData, OpenAIUsageLog, SimulatedTrade
+from app.models import Decision, FeatureSnapshot, MarketData, OpenAIUsageLog, SimulatedTrade, User
+from app.services.auth import AuthService, APIKeyService
+from app.services.binance_api import BinanceService
 from app.services.agent_cycle import AgentCycle
 from app.services.ai_advisor import AIAdvisor
 from app.services.backtest import BacktestService
@@ -41,6 +45,44 @@ backtest_service = BacktestService()
 runtime_state = RuntimeStateService()
 currency_service = CurrencyService()
 live_quote_service = LiveQuoteService()
+auth_service = AuthService()
+api_key_service = APIKeyService()
+binance_service = BinanceService()
+
+
+# Request models for auth
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class AddAPIKeyRequest(BaseModel):
+    exchange: str = "binance"
+    api_key: str
+    api_secret: str
+    is_testnet: bool = False
+    permissions: str = "read"
+
+
+async def get_current_user(session_token: Optional[str] = Cookie(None)) -> Optional[User]:
+    """Get current user from session token cookie."""
+    if not session_token:
+        return None
+    with SessionLocal() as session:
+        user = auth_service.validate_token(session, session_token)
+        return user
+
+
+async def require_auth(session_token: Optional[str] = Cookie(None)) -> User:
+    """Require authentication - raises 401 if not logged in."""
+    user = await get_current_user(session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Wymagane logowanie")
+    return user
 
 
 def run_managed_cycle() -> dict[str, object]:
@@ -341,3 +383,220 @@ def _build_dashboard_payload(session, include_chart_package: bool = False, chart
             "live_quote_cache_seconds": settings.live_quote_cache_seconds,
         },
     }
+
+
+# ============== AUTH ENDPOINTS ==============
+
+@app.post("/api/auth/register")
+def register(request: RegisterRequest) -> JSONResponse:
+    """Register a new user account."""
+    with SessionLocal() as session:
+        result = auth_service.register(
+            session, 
+            email=request.email, 
+            username=request.username, 
+            password=request.password
+        )
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        response = JSONResponse({"success": True, "user": result["user"]})
+        response.set_cookie(
+            key="session_token",
+            value=result["token"],
+            httponly=True,
+            max_age=30 * 24 * 3600,  # 30 days
+            samesite="lax"
+        )
+        return response
+
+
+@app.post("/api/auth/login")
+def login(request: LoginRequest) -> JSONResponse:
+    """Login with email and password."""
+    with SessionLocal() as session:
+        result = auth_service.login(session, email=request.email, password=request.password)
+        if not result["success"]:
+            raise HTTPException(status_code=401, detail=result["error"])
+        
+        response = JSONResponse({"success": True, "user": result["user"]})
+        response.set_cookie(
+            key="session_token",
+            value=result["token"],
+            httponly=True,
+            max_age=30 * 24 * 3600,
+            samesite="lax"
+        )
+        return response
+
+
+@app.post("/api/auth/logout")
+async def logout(session_token: Optional[str] = Cookie(None)) -> JSONResponse:
+    """Logout current user."""
+    if session_token:
+        with SessionLocal() as session:
+            auth_service.logout(session, session_token)
+    
+    response = JSONResponse({"success": True})
+    response.delete_cookie(key="session_token")
+    return response
+
+
+@app.get("/api/auth/me")
+async def get_me(session_token: Optional[str] = Cookie(None)) -> JSONResponse:
+    """Get current logged in user."""
+    user = await get_current_user(session_token)
+    if not user:
+        return JSONResponse({"authenticated": False, "user": None})
+    
+    return JSONResponse({
+        "authenticated": True,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
+    })
+
+
+# ============== API KEY MANAGEMENT ==============
+
+@app.get("/api/keys")
+async def list_api_keys(user: User = Depends(require_auth)) -> JSONResponse:
+    """List user's API keys (secrets are masked)."""
+    with SessionLocal() as session:
+        keys = api_key_service.get_user_api_keys(session, user.id)
+        return JSONResponse({
+            "keys": [
+                {
+                    "id": key.id,
+                    "exchange": key.exchange,
+                    "api_key": key.api_key[:8] + "..." + key.api_key[-4:] if len(key.api_key) > 12 else "***",
+                    "is_testnet": key.is_testnet,
+                    "permissions": key.permissions,
+                    "created_at": key.created_at.isoformat() if key.created_at else None,
+                }
+                for key in keys
+            ]
+        })
+
+
+@app.post("/api/keys")
+async def add_api_key(request: AddAPIKeyRequest, user: User = Depends(require_auth)) -> JSONResponse:
+    """Add a new API key."""
+    with SessionLocal() as session:
+        result = api_key_service.add_api_key(
+            session,
+            user_id=user.id,
+            exchange=request.exchange,
+            api_key=request.api_key,
+            api_secret=request.api_secret,
+            is_testnet=request.is_testnet,
+            permissions=request.permissions
+        )
+        if not result["success"]:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return JSONResponse({"success": True, "key_id": result["key_id"]})
+
+
+@app.delete("/api/keys/{key_id}")
+async def delete_api_key(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Delete an API key."""
+    with SessionLocal() as session:
+        result = api_key_service.delete_api_key(session, key_id=key_id, user_id=user.id)
+        if not result["success"]:
+            raise HTTPException(status_code=404, detail=result["error"])
+        return JSONResponse({"success": True})
+
+
+# ============== BINANCE API ENDPOINTS ==============
+
+@app.get("/api/binance/test")
+async def test_binance_connection(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Test Binance API connection with specified key."""
+    with SessionLocal() as session:
+        keys = api_key_service.get_user_api_keys(session, user.id)
+        selected_key = next((k for k in keys if k.id == key_id), None)
+        if not selected_key:
+            raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
+        
+        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
+        if not api_secret:
+            raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
+        
+        client = binance_service.get_client(
+            api_key=selected_key.api_key,
+            api_secret=api_secret,
+            testnet=selected_key.is_testnet
+        )
+        result = client.test_connection()
+        return JSONResponse(result)
+
+
+@app.get("/api/binance/account")
+async def get_binance_account(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Get Binance account information."""
+    with SessionLocal() as session:
+        keys = api_key_service.get_user_api_keys(session, user.id)
+        selected_key = next((k for k in keys if k.id == key_id), None)
+        if not selected_key:
+            raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
+        
+        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
+        if not api_secret:
+            raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
+        
+        client = binance_service.get_client(
+            api_key=selected_key.api_key,
+            api_secret=api_secret,
+            testnet=selected_key.is_testnet
+        )
+        result = client.get_account()
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return JSONResponse(result)
+
+
+@app.get("/api/binance/balances")
+async def get_binance_balances(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Get non-zero Binance balances."""
+    with SessionLocal() as session:
+        keys = api_key_service.get_user_api_keys(session, user.id)
+        selected_key = next((k for k in keys if k.id == key_id), None)
+        if not selected_key:
+            raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
+        
+        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
+        if not api_secret:
+            raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
+        
+        client = binance_service.get_client(
+            api_key=selected_key.api_key,
+            api_secret=api_secret,
+            testnet=selected_key.is_testnet
+        )
+        balances = client.get_balances()
+        return JSONResponse({"balances": balances})
+
+
+@app.get("/api/binance/portfolio")
+async def get_binance_portfolio(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Get Binance portfolio value in USDT."""
+    with SessionLocal() as session:
+        keys = api_key_service.get_user_api_keys(session, user.id)
+        selected_key = next((k for k in keys if k.id == key_id), None)
+        if not selected_key:
+            raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
+        
+        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
+        if not api_secret:
+            raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
+        
+        client = binance_service.get_client(
+            api_key=selected_key.api_key,
+            api_secret=api_secret,
+            testnet=selected_key.is_testnet
+        )
+        portfolio = client.get_portfolio_value()
+        return JSONResponse(portfolio)

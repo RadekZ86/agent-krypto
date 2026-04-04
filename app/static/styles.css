@@ -1899,6 +1899,466 @@ th {
     transform: translateY(0);
 }
 
+/* ============================================ */
+/* LOGIN SCREEN                                */
+/* ============================================ */
+
+.login-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(160deg, #061017 0%, #091b23 48%, #0f2731 100%);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.login-overlay.hidden {
+    display: none;
+}
+
+.login-container {
+    width: 100%;
+    max-width: 400px;
+    background: var(--panel-strong);
+    border-radius: 20px;
+    padding: 40px 32px;
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+}
+
+.login-logo {
+    text-align: center;
+    margin-bottom: 32px;
+}
+
+.logo-icon.large {
+    font-size: 3rem;
+    display: block;
+    margin-bottom: 12px;
+}
+
+.login-logo h1 {
+    font-size: 1.8rem;
+    margin: 0;
+    color: var(--text);
+}
+
+.login-subtitle {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 8px 0 0 0;
+}
+
+.auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.auth-form.hidden {
+    display: none;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-group label {
+    font-size: 0.85rem;
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.form-group input {
+    padding: 12px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--bg-alt);
+    color: var(--text);
+    font-size: 1rem;
+    transition: all 150ms ease;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(240, 180, 74, 0.15);
+}
+
+.form-group input::placeholder {
+    color: var(--muted);
+    opacity: 0.6;
+}
+
+.btn-primary {
+    padding: 14px 24px;
+    border-radius: 10px;
+    border: none;
+    background: linear-gradient(135deg, var(--accent) 0%, #d99b3a 100%);
+    color: #0a1a22;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(240, 180, 74, 0.3);
+}
+
+.btn-ghost {
+    padding: 12px 24px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.btn-ghost:hover {
+    border-color: var(--muted);
+    color: var(--text);
+}
+
+.btn-full {
+    width: 100%;
+}
+
+.auth-switch {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin: 8px 0;
+}
+
+.auth-switch a {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.auth-switch a:hover {
+    text-decoration: underline;
+}
+
+.auth-error {
+    background: rgba(255, 126, 107, 0.15);
+    border: 1px solid var(--danger);
+    padding: 12px 16px;
+    border-radius: 8px;
+    color: var(--danger);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.auth-error.hidden {
+    display: none;
+}
+
+#skip-login {
+    margin-top: 24px;
+    border-top: 1px solid var(--line);
+    padding-top: 24px;
+}
+
+/* ============================================ */
+/* USER MENU                                   */
+/* ============================================ */
+
+.user-menu-container {
+    position: relative;
+}
+
+.user-btn {
+    gap: 6px;
+}
+
+.user-btn span {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.user-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 8px;
+    min-width: 200px;
+    background: var(--panel-strong);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    z-index: 200;
+}
+
+.user-dropdown.hidden {
+    display: none;
+}
+
+.dropdown-header {
+    padding: 16px;
+    background: var(--bg-alt);
+    border-bottom: 1px solid var(--line);
+}
+
+.user-email {
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
+.dropdown-divider {
+    height: 1px;
+    background: var(--line);
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 150ms ease;
+    text-align: left;
+}
+
+.dropdown-item:hover {
+    background: var(--bg-alt);
+}
+
+.dropdown-item svg {
+    width: 18px;
+    height: 18px;
+    stroke: var(--muted);
+}
+
+/* ============================================ */
+/* API KEYS MANAGEMENT                         */
+/* ============================================ */
+
+.api-keys-card .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.api-key-form {
+    margin-top: 16px;
+    padding: 16px;
+    background: var(--bg-alt);
+    border-radius: 12px;
+    border: 1px solid var(--line);
+}
+
+.api-key-form.hidden {
+    display: none;
+}
+
+.form-row {
+    margin-bottom: 12px;
+}
+
+.form-row.inline {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+}
+
+.small-select {
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.85rem;
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+.api-key-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-alt);
+    border-radius: 10px;
+    margin-bottom: 8px;
+}
+
+.api-key-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.api-key-name {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.api-key-meta {
+    font-size: 0.8rem;
+    color: var(--muted);
+    display: flex;
+    gap: 8px;
+}
+
+.api-key-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.api-key-actions button {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.btn-test {
+    background: var(--accent-2);
+    color: #0a1a22;
+}
+
+.btn-delete {
+    background: rgba(255, 126, 107, 0.2);
+    color: var(--danger);
+}
+
+.btn-delete:hover {
+    background: var(--danger);
+    color: white;
+}
+
+/* Binance Balances */
+.binance-balances {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.balance-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.balance-item:last-child {
+    border-bottom: none;
+}
+
+.balance-asset {
+    font-weight: 500;
+}
+
+.balance-amount {
+    color: var(--accent);
+}
+
+.portfolio-value-display {
+    margin-top: 16px;
+    padding: 16px;
+    background: linear-gradient(135deg, rgba(79, 209, 166, 0.15) 0%, rgba(240, 180, 74, 0.15) 100%);
+    border-radius: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.portfolio-value-display.hidden {
+    display: none;
+}
+
+.portfolio-value-display .label {
+    color: var(--muted);
+}
+
+.portfolio-value-display .value {
+    font-size: 1.4rem;
+    color: var(--accent);
+}
+
+.empty-state {
+    text-align: center;
+    color: var(--muted);
+    padding: 24px;
+    font-size: 0.9rem;
+}
+
+.small-btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.small-btn:hover {
+    background: var(--accent);
+    color: #0a1a22;
+}
+
+/* Mobile adjustments for login */
+@media (max-width: 480px) {
+    .login-container {
+        padding: 32px 24px;
+    }
+    
+    .logo-icon.large {
+        font-size: 2.5rem;
+    }
+    
+    .login-logo h1 {
+        font-size: 1.5rem;
+    }
+    
+    .user-btn span {
+        display: none;
+    }
+}
+
 /* Install PWA prompt */
 .install-prompt {
     position: fixed;

@@ -22,6 +22,56 @@
 </head>
 <body class="app-mode">
     
+    <!-- Login Screen Overlay -->
+    <div id="login-screen" class="login-overlay">
+        <div class="login-container">
+            <div class="login-logo">
+                <span class="logo-icon large">₿</span>
+                <h1>Agent Krypto</h1>
+                <p class="login-subtitle">Twój asystent tradingowy</p>
+            </div>
+            
+            <div id="login-form-container" class="login-form-area">
+                <!-- Login Form -->
+                <form id="login-form" class="auth-form">
+                    <div class="form-group">
+                        <label for="login-email">Email</label>
+                        <input type="email" id="login-email" placeholder="twoj@email.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Hasło</label>
+                        <input type="password" id="login-password" placeholder="••••••••" required>
+                    </div>
+                    <button type="submit" class="btn-primary btn-full">Zaloguj się</button>
+                    <p class="auth-switch">Nie masz konta? <a href="#" id="show-register">Zarejestruj się</a></p>
+                </form>
+                
+                <!-- Register Form (hidden by default) -->
+                <form id="register-form" class="auth-form hidden">
+                    <div class="form-group">
+                        <label for="register-username">Nazwa użytkownika</label>
+                        <input type="text" id="register-username" placeholder="trader123" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="register-email">Email</label>
+                        <input type="email" id="register-email" placeholder="twoj@email.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="register-password">Hasło</label>
+                        <input type="password" id="register-password" placeholder="Min. 8 znaków" required minlength="8">
+                    </div>
+                    <button type="submit" class="btn-primary btn-full">Zarejestruj się</button>
+                    <p class="auth-switch">Masz już konto? <a href="#" id="show-login">Zaloguj się</a></p>
+                </form>
+                
+                <div id="auth-error" class="auth-error hidden"></div>
+                
+                <!-- Skip login option -->
+                <button id="skip-login" class="btn-ghost btn-full">Kontynuuj bez logowania</button>
+            </div>
+        </div>
+    </div>
+
     <!-- App Sidebar -->
     <aside class="app-sidebar">
         <div class="sidebar-logo">
@@ -85,6 +135,27 @@
             <button id="ai-button" class="header-btn accent" title="Analiza AI">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4"/></svg>
             </button>
+            <!-- User Account Menu -->
+            <div class="user-menu-container">
+                <button id="user-menu-btn" class="header-btn user-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    <span id="user-menu-name">Konto</span>
+                </button>
+                <div id="user-dropdown" class="user-dropdown hidden">
+                    <div id="user-info" class="dropdown-header">
+                        <span class="user-email">-</span>
+                    </div>
+                    <div class="dropdown-divider"></div>
+                    <button class="dropdown-item" data-action="api-keys">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                        Klucze API
+                    </button>
+                    <button class="dropdown-item" data-action="logout">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Wyloguj
+                    </button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -350,6 +421,68 @@
         <section class="app-view" data-view="settings">
             <div class="view-content">
                 <div class="settings-grid">
+                    <!-- API Keys Management -->
+                    <div class="card api-keys-card">
+                        <div class="card-header">
+                            <h3>Klucze API Binance</h3>
+                            <button id="add-api-key-btn" class="small-btn">+ Dodaj klucz</button>
+                        </div>
+                        <div class="card-body">
+                            <div id="api-keys-list" class="stack-list">
+                                <p class="empty-state">Zaloguj się aby zarządzać kluczami API</p>
+                            </div>
+                            
+                            <!-- Add API Key Form (hidden) -->
+                            <form id="add-api-key-form" class="api-key-form hidden">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="api-key-input">API Key</label>
+                                        <input type="text" id="api-key-input" placeholder="Twój klucz API Binance" required>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="api-secret-input">API Secret</label>
+                                        <input type="password" id="api-secret-input" placeholder="Twój secret API Binance" required>
+                                    </div>
+                                </div>
+                                <div class="form-row inline">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="api-testnet">
+                                        <span>Testnet</span>
+                                    </label>
+                                    <select id="api-permissions" class="small-select">
+                                        <option value="read">Tylko odczyt</option>
+                                        <option value="trade">Trading</option>
+                                    </select>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="button" id="cancel-api-key" class="btn-ghost">Anuluj</button>
+                                    <button type="submit" class="btn-primary">Zapisz</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- Binance Account Info -->
+                    <div class="card binance-account-card">
+                        <div class="card-header">
+                            <h3>Konto Binance</h3>
+                            <select id="binance-key-selector" class="small-select">
+                                <option value="">Wybierz klucz API</option>
+                            </select>
+                        </div>
+                        <div class="card-body">
+                            <div id="binance-balances" class="binance-balances">
+                                <p class="empty-state">Wybierz klucz API aby zobaczyć balans</p>
+                            </div>
+                            <div id="binance-portfolio-value" class="portfolio-value-display hidden">
+                                <span class="label">Wartość portfela:</span>
+                                <strong class="value">-</strong>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <div class="card">
                         <div class="card-header">
                             <h3>Status systemu</h3>
