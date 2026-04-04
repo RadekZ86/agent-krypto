@@ -61,6 +61,7 @@ class LoginRequest(BaseModel):
     password: str
 
 class AddAPIKeyRequest(BaseModel):
+    label: str | None = None
     exchange: str = "binance"
     api_key: str
     api_secret: str
@@ -83,6 +84,43 @@ async def require_auth(session_token: Optional[str] = Cookie(None)) -> User:
     if not user:
         raise HTTPException(status_code=401, detail="Wymagane logowanie")
     return user
+
+
+def serialize_user(user: User) -> dict[str, object]:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+def resolve_request_user(request: Request) -> User | None:
+    session_token = request.cookies.get("session_token")
+    if not session_token:
+        return None
+    with SessionLocal() as session:
+        return auth_service.validate_token(session, session_token)
+
+
+def get_user_binance_client(session, user_id: int, key_id: int | None = None):
+    keys = api_key_service.get_user_api_keys(session, user_id)
+    if not keys:
+        return None, None
+
+    selected_key = next((key for key in keys if key.id == key_id), None) if key_id is not None else keys[0]
+    if selected_key is None:
+        return None, None
+
+    api_secret = api_key_service.get_decrypted_secret(selected_key)
+    if not api_secret:
+        return selected_key, None
+
+    return selected_key, binance_service.get_client(
+        api_key=selected_key.api_key,
+        api_secret=api_secret,
+        testnet=selected_key.is_testnet,
+    )
 
 
 def run_managed_cycle() -> dict[str, object]:
@@ -135,10 +173,11 @@ def index(request: Request) -> HTMLResponse:
 
 
 @app.get("/api/dashboard")
-def dashboard() -> JSONResponse:
+def dashboard(request: Request) -> JSONResponse:
     scheduler_service.ensure_running()
+    current_user = resolve_request_user(request)
     with SessionLocal() as session:
-        return JSONResponse(_build_dashboard_payload(session), headers=no_cache_headers())
+        return JSONResponse(_build_dashboard_payload(session, current_user=current_user), headers=no_cache_headers())
 
 
 @app.get("/api/chart-package")
@@ -180,9 +219,15 @@ def scheduler_stop() -> JSONResponse:
 
 
 @app.get("/api/ai-insight")
-def ai_insight(symbol: str | None = None) -> JSONResponse:
+def ai_insight(request: Request, symbol: str | None = None) -> JSONResponse:
+    current_user = resolve_request_user(request)
     with SessionLocal() as session:
-        dashboard_payload = _build_dashboard_payload(session, include_chart_package=True, chart_focus_symbol=symbol)
+        dashboard_payload = _build_dashboard_payload(
+            session,
+            include_chart_package=True,
+            chart_focus_symbol=symbol,
+            current_user=current_user,
+        )
         result = ai_advisor.generate_market_brief(session, dashboard_payload, symbol=symbol)
     return JSONResponse(result)
 
@@ -226,7 +271,12 @@ def chart_history(symbol: str, force_refresh: bool = False) -> JSONResponse:
     return JSONResponse(payload)
 
 
-def _build_dashboard_payload(session, include_chart_package: bool = False, chart_focus_symbol: str | None = None) -> dict[str, object]:
+def _build_dashboard_payload(
+    session,
+    include_chart_package: bool = False,
+    chart_focus_symbol: str | None = None,
+    current_user: User | None = None,
+) -> dict[str, object]:
     active_profile = runtime_state.get_active_profile(session)
     display_currency = runtime_state.get_display_currency(session)
     usd_to_display_rate, rate_source = currency_service.get_rate(settings.quote_currency, display_currency)
@@ -318,6 +368,22 @@ def _build_dashboard_payload(session, include_chart_package: bool = False, chart
         "preferred_trade_quotes": settings.preferred_trade_quotes,
     }
 
+    private_learning = None
+    trade_ranking = None
+    if current_user is not None:
+        _, client = get_user_binance_client(session, current_user.id)
+        if client is not None:
+            private_learning = learning_center.build_private_learning_state(
+                client,
+                settings.tracked_symbols,
+                settings.preferred_trade_quotes,
+            )
+            trade_ranking = learning_center.build_trade_history_ranking(
+                client,
+                settings.tracked_symbols,
+                settings.preferred_trade_quotes,
+            )
+
     return {
         "wallet": wallet_service.get_snapshot(session),
         "market": market_rows,
@@ -353,6 +419,8 @@ def _build_dashboard_payload(session, include_chart_package: bool = False, chart
         "learning": learning_payload,
         "articles": learning_center.get_articles(),
         "backtest": backtest_payload,
+        "private_learning": private_learning,
+        "trade_ranking": trade_ranking,
         "api_usage": {
             "calls": int(api_usage[0] or 0),
             "input_tokens": int(api_usage[1] or 0),
@@ -391,22 +459,30 @@ def _build_dashboard_payload(session, include_chart_package: bool = False, chart
 def register(request: RegisterRequest) -> JSONResponse:
     """Register a new user account."""
     with SessionLocal() as session:
-        result = auth_service.register(
+        success, message, user = auth_service.register(
             session, 
             email=request.email, 
             username=request.username, 
             password=request.password
         )
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["error"])
-        
-        response = JSONResponse({"success": True, "user": result["user"]})
+        if not success or user is None:
+            raise HTTPException(status_code=400, detail=message)
+
+        login_success, login_message, token = auth_service.login(
+            session,
+            email_or_username=request.email,
+            password=request.password,
+        )
+        if not login_success or token is None:
+            raise HTTPException(status_code=400, detail=login_message)
+
+        response = JSONResponse({"success": True, "user": serialize_user(user)})
         response.set_cookie(
             key="session_token",
-            value=result["token"],
+            value=token,
             httponly=True,
-            max_age=30 * 24 * 3600,  # 30 days
-            samesite="lax"
+            max_age=30 * 24 * 3600,
+            samesite="lax",
         )
         return response
 
@@ -415,17 +491,25 @@ def register(request: RegisterRequest) -> JSONResponse:
 def login(request: LoginRequest) -> JSONResponse:
     """Login with email and password."""
     with SessionLocal() as session:
-        result = auth_service.login(session, email=request.email, password=request.password)
-        if not result["success"]:
-            raise HTTPException(status_code=401, detail=result["error"])
-        
-        response = JSONResponse({"success": True, "user": result["user"]})
+        success, message, token = auth_service.login(
+            session,
+            email_or_username=request.email,
+            password=request.password,
+        )
+        if not success or token is None:
+            raise HTTPException(status_code=401, detail=message)
+
+        user = auth_service.validate_token(session, token)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Nie udalo sie odczytac sesji uzytkownika")
+
+        response = JSONResponse({"success": True, "user": serialize_user(user)})
         response.set_cookie(
             key="session_token",
-            value=result["token"],
+            value=token,
             httponly=True,
             max_age=30 * 24 * 3600,
-            samesite="lax"
+            samesite="lax",
         )
         return response
 
@@ -451,12 +535,7 @@ async def get_me(session_token: Optional[str] = Cookie(None)) -> JSONResponse:
     
     return JSONResponse({
         "authenticated": True,
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "username": user.username,
-            "created_at": user.created_at.isoformat() if user.created_at else None,
-        }
+        "user": serialize_user(user),
     })
 
 
@@ -471,6 +550,7 @@ async def list_api_keys(user: User = Depends(require_auth)) -> JSONResponse:
             "keys": [
                 {
                     "id": key.id,
+                    "label": key.label,
                     "exchange": key.exchange,
                     "api_key": key.api_key[:8] + "..." + key.api_key[-4:] if len(key.api_key) > 12 else "***",
                     "is_testnet": key.is_testnet,
@@ -486,27 +566,29 @@ async def list_api_keys(user: User = Depends(require_auth)) -> JSONResponse:
 async def add_api_key(request: AddAPIKeyRequest, user: User = Depends(require_auth)) -> JSONResponse:
     """Add a new API key."""
     with SessionLocal() as session:
-        result = api_key_service.add_api_key(
+        label = request.label or f"{request.exchange.upper()} {request.api_key[:4]}"
+        success, message, api_key_obj = api_key_service.add_api_key(
             session,
             user_id=user.id,
+            label=label,
             exchange=request.exchange,
             api_key=request.api_key,
             api_secret=request.api_secret,
             is_testnet=request.is_testnet,
             permissions=request.permissions
         )
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["error"])
-        return JSONResponse({"success": True, "key_id": result["key_id"]})
+        if not success or api_key_obj is None:
+            raise HTTPException(status_code=400, detail=message)
+        return JSONResponse({"success": True, "key_id": api_key_obj.id})
 
 
 @app.delete("/api/keys/{key_id}")
 async def delete_api_key(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
     """Delete an API key."""
     with SessionLocal() as session:
-        result = api_key_service.delete_api_key(session, key_id=key_id, user_id=user.id)
-        if not result["success"]:
-            raise HTTPException(status_code=404, detail=result["error"])
+        deleted = api_key_service.delete_api_key(session, user_id=user.id, key_id=key_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
         return JSONResponse({"success": True})
 
 
@@ -516,42 +598,31 @@ async def delete_api_key(key_id: int, user: User = Depends(require_auth)) -> JSO
 async def test_binance_connection(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
     """Test Binance API connection with specified key."""
     with SessionLocal() as session:
-        keys = api_key_service.get_user_api_keys(session, user.id)
-        selected_key = next((k for k in keys if k.id == key_id), None)
-        if not selected_key:
+        selected_key, client = get_user_binance_client(session, user.id, key_id)
+        if selected_key is None:
             raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
-        
-        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
-        if not api_secret:
+        if client is None:
             raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
-        
-        client = binance_service.get_client(
-            api_key=selected_key.api_key,
-            api_secret=api_secret,
-            testnet=selected_key.is_testnet
-        )
-        result = client.test_connection()
-        return JSONResponse(result)
+
+        success, message = client.test_connection()
+        return JSONResponse({
+            "success": success,
+            "message": message,
+            "key_label": selected_key.label,
+            "is_testnet": selected_key.is_testnet,
+        })
 
 
 @app.get("/api/binance/account")
 async def get_binance_account(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
     """Get Binance account information."""
     with SessionLocal() as session:
-        keys = api_key_service.get_user_api_keys(session, user.id)
-        selected_key = next((k for k in keys if k.id == key_id), None)
-        if not selected_key:
+        selected_key, client = get_user_binance_client(session, user.id, key_id)
+        if selected_key is None:
             raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
-        
-        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
-        if not api_secret:
+        if client is None:
             raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
-        
-        client = binance_service.get_client(
-            api_key=selected_key.api_key,
-            api_secret=api_secret,
-            testnet=selected_key.is_testnet
-        )
+
         result = client.get_account()
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
@@ -562,21 +633,15 @@ async def get_binance_account(key_id: int, user: User = Depends(require_auth)) -
 async def get_binance_balances(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
     """Get non-zero Binance balances."""
     with SessionLocal() as session:
-        keys = api_key_service.get_user_api_keys(session, user.id)
-        selected_key = next((k for k in keys if k.id == key_id), None)
-        if not selected_key:
+        selected_key, client = get_user_binance_client(session, user.id, key_id)
+        if selected_key is None:
             raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
-        
-        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
-        if not api_secret:
+        if client is None:
             raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
-        
-        client = binance_service.get_client(
-            api_key=selected_key.api_key,
-            api_secret=api_secret,
-            testnet=selected_key.is_testnet
-        )
+
         balances = client.get_balances()
+        if balances and isinstance(balances[0], dict) and "error" in balances[0]:
+            raise HTTPException(status_code=400, detail=balances[0]["error"])
         return JSONResponse({"balances": balances})
 
 
@@ -584,19 +649,18 @@ async def get_binance_balances(key_id: int, user: User = Depends(require_auth)) 
 async def get_binance_portfolio(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
     """Get Binance portfolio value in USDT."""
     with SessionLocal() as session:
-        keys = api_key_service.get_user_api_keys(session, user.id)
-        selected_key = next((k for k in keys if k.id == key_id), None)
-        if not selected_key:
+        selected_key, client = get_user_binance_client(session, user.id, key_id)
+        if selected_key is None:
             raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
-        
-        api_secret = api_key_service.get_decrypted_secret(session, key_id, user.id)
-        if not api_secret:
+        if client is None:
             raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
-        
-        client = binance_service.get_client(
-            api_key=selected_key.api_key,
-            api_secret=api_secret,
-            testnet=selected_key.is_testnet
-        )
+
         portfolio = client.get_portfolio_value()
-        return JSONResponse(portfolio)
+        if "error" in portfolio:
+            raise HTTPException(status_code=400, detail=portfolio["error"])
+
+        return JSONResponse({
+            "total_value_usdt": portfolio["total_value"],
+            "quote_currency": portfolio["quote_currency"],
+            "holdings": portfolio["holdings"],
+        })

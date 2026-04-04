@@ -182,6 +182,187 @@ class LearningCenter:
         self.probability_engine = ProbabilityEngine()
         self._lifecycle_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
 
+    def build_private_learning_state(
+        self,
+        client,
+        tracked_symbols: list[str],
+        preferred_quotes: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        preferred_quote = (preferred_quotes or ["USDT"])[0].upper()
+        portfolio = client.get_portfolio_value(preferred_quote)
+        if not portfolio or "error" in portfolio:
+            return None
+
+        holdings = [holding for holding in portfolio.get("holdings", []) if float(holding.get("value", 0.0)) > 0]
+        total_value = float(portfolio.get("total_value", 0.0) or 0.0)
+        open_orders = client.get_open_orders()
+        if isinstance(open_orders, dict) and "error" in open_orders:
+            open_orders = []
+
+        top_holdings = holdings[:5]
+        top_weights = []
+        tracked_activity: list[dict[str, Any]] = []
+        trade_symbols: list[str] = []
+
+        for holding in top_holdings:
+            asset = str(holding.get("asset", "")).upper()
+            value = float(holding.get("value", 0.0) or 0.0)
+            weight = round((value / total_value) * 100, 2) if total_value > 0 else 0.0
+            top_weights.append({
+                "asset": asset,
+                "value": round(value, 2),
+                "weight": weight,
+            })
+
+            if asset == preferred_quote:
+                continue
+
+            pair_symbol = f"{asset}{preferred_quote}"
+            trades = client.get_my_trades(pair_symbol, limit=20)
+            if not isinstance(trades, list) or (trades and isinstance(trades[0], dict) and "error" in trades[0]):
+                continue
+
+            if trades:
+                buy_count = sum(1 for trade in trades if trade.get("isBuyer"))
+                sell_count = len(trades) - buy_count
+                quote_volume = sum(float(trade.get("quoteQty", 0.0) or 0.0) for trade in trades)
+                tracked_activity.append(
+                    {
+                        "symbol": pair_symbol,
+                        "trade_count": len(trades),
+                        "buy_count": buy_count,
+                        "sell_count": sell_count,
+                        "quote_volume": round(quote_volume, 2),
+                    }
+                )
+                trade_symbols.append(pair_symbol)
+
+        tracked_symbol_set = {symbol.upper() for symbol in tracked_symbols}
+        tracked_holdings = [item for item in top_weights if item["asset"] in tracked_symbol_set]
+        concentration = top_weights[0]["weight"] if top_weights else 0.0
+
+        findings = []
+        if top_weights:
+            leader = top_weights[0]
+            findings.append(f"Najwieksza ekspozycja realnego portfela to {leader['asset']} ({leader['weight']:.1f}% wartosci).")
+        if concentration >= 55:
+            findings.append("Portfel jest mocno skoncentrowany, wiec agent powinien ostrozniej oceniac kolejne wejscia w ten sam motyw rynku.")
+        elif top_weights:
+            findings.append("Portfel jest bardziej rozproszony, co daje agentowi szerszy material do nauki porownawczej miedzy aktywami.")
+        if tracked_activity:
+            busiest = tracked_activity[0]
+            findings.append(
+                f"Najwiecej prywatnej aktywnosci jest na {busiest['symbol']} ({busiest['trade_count']} ostatnich trade'ow, wolumen {busiest['quote_volume']:.2f} {preferred_quote})."
+            )
+        if open_orders:
+            findings.append(f"Na Binance sa teraz {len(open_orders)} otwarte zlecenia, co daje agentowi dodatkowy kontekst intencji portfela.")
+
+        next_steps = [
+            "Porownuj realne aktywa z najwyzsza ekspozycja do sygnalow paper tradingu i obnizaj confidence, gdy agent chce dokladac do juz napompowanej pozycji.",
+            "Analizuj, czy prywatna aktywnosc BUY/SELL pokrywa sie z momentum na wykresie i ucz sie odrozniania kontynuacji od pogoni za ruchem.",
+        ]
+        if tracked_holdings:
+            next_steps.append("Priorytetyzuj nauke na coinach, ktore rzeczywiscie wystepuja w portfelu Binance, bo tam agent ma najbardziej wartosciowy feedback z realnej ekspozycji.")
+
+        return {
+            "enabled": True,
+            "quote_currency": preferred_quote,
+            "total_value": round(total_value, 2),
+            "top_holdings": top_weights,
+            "tracked_holdings": tracked_holdings,
+            "recent_trade_activity": tracked_activity,
+            "recent_trade_symbols": trade_symbols,
+            "open_orders_count": len(open_orders),
+            "findings": findings,
+            "next_steps": next_steps,
+        }
+
+    def build_trade_history_ranking(
+        self,
+        client,
+        tracked_symbols: list[str],
+        preferred_quotes: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        preferred_quote = (preferred_quotes or ["USDT"])[0].upper()
+        ranking_entries: list[dict[str, Any]] = []
+
+        for symbol in tracked_symbols:
+            pair = f"{symbol}{preferred_quote}"
+            trades = client.get_my_trades(pair, limit=50)
+            if not isinstance(trades, list) or not trades:
+                continue
+            if isinstance(trades[0], dict) and "error" in trades[0]:
+                continue
+
+            buys = [t for t in trades if t.get("isBuyer")]
+            sells = [t for t in trades if not t.get("isBuyer")]
+            total_buy_qty = sum(float(t.get("qty", 0)) for t in buys)
+            total_sell_qty = sum(float(t.get("qty", 0)) for t in sells)
+            total_buy_quote = sum(float(t.get("quoteQty", 0)) for t in buys)
+            total_sell_quote = sum(float(t.get("quoteQty", 0)) for t in sells)
+            avg_buy = total_buy_quote / total_buy_qty if total_buy_qty > 0 else 0.0
+            avg_sell = total_sell_quote / total_sell_qty if total_sell_qty > 0 else 0.0
+            realized_pnl = total_sell_quote - (avg_buy * total_sell_qty) if total_sell_qty > 0 and avg_buy > 0 else 0.0
+            trade_count = len(trades)
+            commission_total = sum(float(t.get("commission", 0)) for t in trades)
+
+            timestamps = [int(t.get("time", 0)) for t in trades if t.get("time")]
+            if len(timestamps) >= 2:
+                span_days = max(1, (max(timestamps) - min(timestamps)) / 86400000)
+                frequency = round(trade_count / span_days, 2)
+            else:
+                frequency = 0.0
+
+            ranking_entries.append({
+                "symbol": pair,
+                "trade_count": trade_count,
+                "buy_count": len(buys),
+                "sell_count": len(sells),
+                "avg_buy_price": round(avg_buy, 4),
+                "avg_sell_price": round(avg_sell, 4),
+                "total_buy_volume": round(total_buy_quote, 2),
+                "total_sell_volume": round(total_sell_quote, 2),
+                "realized_pnl": round(realized_pnl, 2),
+                "commission": round(commission_total, 6),
+                "frequency": frequency,
+            })
+
+        if not ranking_entries:
+            return None
+
+        ranking_entries.sort(key=lambda e: e["trade_count"], reverse=True)
+
+        total_realized = sum(e["realized_pnl"] for e in ranking_entries)
+        total_trades = sum(e["trade_count"] for e in ranking_entries)
+        profitable_pairs = sum(1 for e in ranking_entries if e["realized_pnl"] > 0)
+        losing_pairs = sum(1 for e in ranking_entries if e["realized_pnl"] < 0)
+        best_pair = max(ranking_entries, key=lambda e: e["realized_pnl"]) if ranking_entries else None
+        worst_pair = min(ranking_entries, key=lambda e: e["realized_pnl"]) if ranking_entries else None
+
+        insights = []
+        if best_pair and best_pair["realized_pnl"] > 0:
+            insights.append(f"Najlepszy pair: {best_pair['symbol']} z PnL +{best_pair['realized_pnl']:.2f} {preferred_quote}.")
+        if worst_pair and worst_pair["realized_pnl"] < 0:
+            insights.append(f"Najgorszy pair: {worst_pair['symbol']} z PnL {worst_pair['realized_pnl']:.2f} {preferred_quote}.")
+        if profitable_pairs > losing_pairs:
+            insights.append(f"Wiecej par zyskownych ({profitable_pairs}) niz stratnych ({losing_pairs}), co sugeruje dobre selekcjonowanie aktywow.")
+        elif losing_pairs > profitable_pairs:
+            insights.append(f"Wiecej par stratnych ({losing_pairs}) niz zyskownych ({profitable_pairs}). Agent powinien zaostrzyc kryteria wejscia.")
+        high_freq = [e for e in ranking_entries if e["frequency"] > 1.0]
+        if high_freq:
+            insights.append(f"{len(high_freq)} par z czestotliwoscia > 1 trade/dzien. Sprawdz, czy czeste transakcje nie generuja nadmiernych prowizji.")
+
+        return {
+            "enabled": True,
+            "quote_currency": preferred_quote,
+            "total_realized_pnl": round(total_realized, 2),
+            "total_trades": total_trades,
+            "profitable_pairs": profitable_pairs,
+            "losing_pairs": losing_pairs,
+            "ranking": ranking_entries[:10],
+            "insights": insights,
+        }
+
     def build_market_summary(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
         rows = load_symbol_market_rows(session, symbol, limit=limit)
         if len(rows) < 10:

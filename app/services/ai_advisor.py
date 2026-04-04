@@ -36,6 +36,8 @@ class AIAdvisor:
         backtest = dashboard.get("backtest", {})
         articles = dashboard.get("articles", [])
         system_status = dashboard.get("system_status", {})
+        private_learning = dashboard.get("private_learning")
+        trade_ranking = dashboard.get("trade_ranking")
         selected_symbol = symbol if symbol in chart_packages else dashboard.get("chart_focus_symbol")
         selected_chart = chart_packages.get(selected_symbol) if selected_symbol else None
 
@@ -54,6 +56,8 @@ class AIAdvisor:
             f"Playbooki wiedzy: {learning.get('knowledge_base', [])}\n"
             f"Nastepne kroki: {learning.get('next_steps', [])}\n"
             f"Braki systemu: {learning.get('requirements', [])}\n"
+            f"Prywatne uczenie Binance: {private_learning}\n"
+            f"Ranking trade'ow Binance: {trade_ranking}\n"
             f"Artykuly edukacyjne: {articles[:8]}\n"
             f"Backtest: {backtest}\n"
             f"Status systemu: {system_status}\n"

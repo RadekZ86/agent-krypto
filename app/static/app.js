@@ -226,7 +226,7 @@ function renderApiKeysList() {
     container.innerHTML = userApiKeys.map(key => `
         <div class="api-key-item" data-key-id="${key.id}">
             <div class="api-key-info">
-                <span class="api-key-name">${key.exchange.toUpperCase()}</span>
+                <span class="api-key-name">${key.label || key.exchange.toUpperCase()}</span>
                 <span class="api-key-meta">
                     <span>${key.api_key}</span>
                     <span>${key.is_testnet ? '🧪 Testnet' : '🌐 Mainnet'}</span>
@@ -247,7 +247,7 @@ function updateBinanceKeySelector() {
     
     selector.innerHTML = '<option value="">Wybierz klucz API</option>' + 
         userApiKeys.map(key => `
-            <option value="${key.id}">${key.exchange.toUpperCase()} - ${key.api_key} ${key.is_testnet ? '(Testnet)' : ''}</option>
+            <option value="${key.id}">${key.label || key.exchange.toUpperCase()} - ${key.api_key} ${key.is_testnet ? '(Testnet)' : ''}</option>
         `).join('');
 }
 
@@ -301,10 +301,10 @@ async function testApiKey(keyId) {
         const data = await response.json();
         
         if (data.success) {
-            alert('✅ Połączenie z Binance działa poprawnie!\nCzas serwera: ' + (data.server_time || 'OK'));
+            alert('✅ Połączenie z Binance działa poprawnie!\n' + (data.message || 'OK'));
             setStatus('Test połączenia: OK');
         } else {
-            alert('❌ Błąd połączenia: ' + (data.error || 'Nieznany błąd'));
+            alert('❌ Błąd połączenia: ' + (data.detail || data.message || 'Nieznany błąd'));
             setStatus('Test połączenia: BŁĄD');
         }
     } catch (error) {
@@ -333,6 +333,13 @@ async function loadBinanceBalances(keyId) {
         
         const balancesData = await balancesRes.json();
         const portfolioData = await portfolioRes.json();
+
+        if (!balancesRes.ok) {
+            throw new Error(balancesData.detail || 'Nie udało się pobrać balansów Binance');
+        }
+        if (!portfolioRes.ok) {
+            throw new Error(portfolioData.detail || 'Nie udało się pobrać portfela Binance');
+        }
         
         if (balancesContainer && balancesData.balances) {
             if (balancesData.balances.length === 0) {
@@ -574,6 +581,9 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
     paintCapitalSummary(payload.wallet);
     paintApiUsage(payload.api_usage);
     paintBoughtCoins(payload.wallet.positions);
+    paintWatchlist(payload.market);
+    paintPrivateLearning(payload.private_learning);
+    paintTradeRanking(payload.trade_ranking);
     paintTradeBuckets(payload.recent_trades);
     paintSectorFilters(payload.config);
     paintMarket(payload.market);
@@ -876,6 +886,9 @@ function paintApiUsage(apiUsage) {
 
 function paintQuickSummary(wallet) {
     const container = document.getElementById("quick-summary");
+    if (!container) {
+        return;
+    }
     const lastClosed = wallet.last_closed_trade;
     container.innerHTML = `
         ${buildQuickCard("Co kupil", `${wallet.buy_count} wejsc`, "Kazde BUY otwiera pozycje na wirtualnym kapitalie.")}
@@ -884,6 +897,156 @@ function paintQuickSummary(wallet) {
         ${buildQuickCard("Strata symulowana", formatQuote(wallet.gross_loss), `${wallet.losing_trades_count} stratnych transakcji paper trading`) }
         ${buildQuickCard("Bilans symulowany", formatQuote(wallet.realized_profit), `Niezrealizowane paper PnL: ${formatQuote(wallet.unrealized_profit)}`) }
         ${buildQuickCard("Ostatni wynik symulowany", lastClosed ? `${lastClosed.symbol} ${formatQuote(lastClosed.profit)}` : "Brak", lastClosed ? new Date(lastClosed.closed_at).toLocaleString("pl-PL") : "Czeka na pierwsze zamkniecie") }
+    `;
+}
+
+function paintWatchlist(rows) {
+    const container = document.getElementById("watchlist-panel");
+    if (!container) {
+        return;
+    }
+
+    const watchRows = [...(rows || [])]
+        .sort((left, right) => Math.abs(Number(right.change_24h || 0)) - Math.abs(Number(left.change_24h || 0)))
+        .slice(0, 8);
+
+    if (!watchRows.length) {
+        container.innerHTML = `<div class="empty-state">Brak danych do watchlisty.</div>`;
+        return;
+    }
+
+    container.innerHTML = watchRows.map((row) => {
+        const change = Number(row.change_24h || 0);
+        const toneClass = change >= 0 ? "positive" : "negative";
+        const sign = change >= 0 ? "+" : "";
+        const isActive = row.symbol === selectedSymbol;
+        return `
+            <button class="watchlist-row ${isActive ? "active" : ""}" data-symbol="${row.symbol}">
+                <span class="watchlist-symbol">${row.symbol}</span>
+                <span class="watchlist-price">${formatQuote(row.price)}</span>
+                <span class="watchlist-change ${toneClass}">${sign}${percentFormatter.format(change)}%</span>
+            </button>
+        `;
+    }).join("");
+
+    container.querySelectorAll(".watchlist-row").forEach((element) => {
+        element.addEventListener("click", async () => {
+            selectedSymbol = element.dataset.symbol;
+            switchView("charts");
+            paintWatchlist(dashboardState?.market || []);
+            try {
+                await renderSelectedChart();
+            } catch (error) {
+                setStatus(error.message || "Nie udalo sie przelaczyc wykresu.");
+            }
+        });
+    });
+}
+
+function paintPrivateLearning(privateLearning) {
+    const container = document.getElementById("private-learning-panel");
+    if (!container) {
+        return;
+    }
+
+    if (!currentUser) {
+        container.innerHTML = `<div class="empty-state">Zaloguj sie i dodaj klucz Binance, aby agent uczyl sie tez z Twojego realnego portfela i aktywnosci.</div>`;
+        return;
+    }
+
+    if (!privateLearning || !privateLearning.enabled) {
+        container.innerHTML = `<div class="empty-state">Brak prywatnych danych Binance do nauki. Dodaj aktywny klucz API z uprawnieniem odczytu.</div>`;
+        return;
+    }
+
+    const holdingsMarkup = (privateLearning.top_holdings || []).slice(0, 4).map((holding) => `
+        <div class="stack-item-meta">
+            ${holding.asset}: ${formatQuote(holding.value, privateLearning.quote_currency)} | ${percentFormatter.format(holding.weight)}%
+        </div>
+    `).join("");
+
+    const findingsMarkup = (privateLearning.findings || []).map((finding) => `
+        <div class="stack-item-meta">${finding}</div>
+    `).join("");
+
+    const nextStepsMarkup = (privateLearning.next_steps || []).map((step) => `
+        <div class="stack-item-meta">${step}</div>
+    `).join("");
+
+    container.innerHTML = `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Realny portfel</span>
+                <span class="badge neutral">${formatQuote(privateLearning.total_value, privateLearning.quote_currency)}</span>
+            </div>
+            ${holdingsMarkup || '<div class="stack-item-meta">Brak istotnych holdingow.</div>'}
+        </div>
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Wnioski dla agenta</span>
+                <span class="badge hold">${privateLearning.open_orders_count} open orders</span>
+            </div>
+            ${findingsMarkup || '<div class="stack-item-meta">Brak dodatkowych wnioskow.</div>'}
+        </div>
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Nastepne kroki nauki</span>
+                <span class="badge buy">BINANCE</span>
+            </div>
+            ${nextStepsMarkup}
+        </div>
+    `;
+}
+
+function paintTradeRanking(tradeRanking) {
+    const container = document.getElementById("trade-ranking-panel");
+    if (!container) {
+        return;
+    }
+
+    if (!currentUser) {
+        container.innerHTML = `<div class="empty-state">Zaloguj sie, aby zobaczyc ranking trade'ow z Binance.</div>`;
+        return;
+    }
+
+    if (!tradeRanking || !tradeRanking.enabled) {
+        container.innerHTML = `<div class="empty-state">Brak historii trade'ow. Dodaj klucz API Binance z uprawnieniem odczytu.</div>`;
+        return;
+    }
+
+    const summaryMarkup = `
+        <div class="stack-item">
+            <div class="stack-item-title">
+                <span>Podsumowanie</span>
+                <span class="badge ${tradeRanking.total_realized_pnl >= 0 ? "buy" : "sell"}">${formatQuote(tradeRanking.total_realized_pnl, tradeRanking.quote_currency)}</span>
+            </div>
+            <div class="stack-item-meta">
+                Trade'ow: ${tradeRanking.total_trades} | Zyskowne pary: ${tradeRanking.profitable_pairs} | Stratne: ${tradeRanking.losing_pairs}
+            </div>
+        </div>
+    `;
+
+    const rankingMarkup = (tradeRanking.ranking || []).map((entry, index) => {
+        const pnlClass = entry.realized_pnl >= 0 ? "positive" : "negative";
+        const sign = entry.realized_pnl >= 0 ? "+" : "";
+        return `
+            <div class="trade-ranking-row">
+                <span class="trade-ranking-rank">#${index + 1}</span>
+                <span class="trade-ranking-symbol">${entry.symbol}</span>
+                <span class="trade-ranking-count">${entry.trade_count} trades</span>
+                <span class="trade-ranking-pnl ${pnlClass}">${sign}${formatQuote(entry.realized_pnl)}</span>
+            </div>
+        `;
+    }).join("");
+
+    const insightsMarkup = (tradeRanking.insights || []).map((insight) => `
+        <div class="stack-item-meta">${insight}</div>
+    `).join("");
+
+    container.innerHTML = `
+        ${summaryMarkup}
+        ${rankingMarkup}
+        ${insightsMarkup ? `<div class="stack-item"><div class="stack-item-title"><span>Wnioski</span><span class="badge hold">AI</span></div>${insightsMarkup}</div>` : ""}
     `;
 }
 
@@ -1262,22 +1425,22 @@ function paintChart(chartPackage, lifecycleHistory) {
 
     chart.innerHTML = `
         ${buildMultiPanelGrid(width, panels, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#4fd1a6", priceMin, priceMax, width, panels.price, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ff7e6b", priceMin, priceMax, width, panels.price, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#26a69a", priceMin, priceMax, width, panels.price, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ef5350", priceMin, priceMax, width, panels.price, paddingX)}
         ${buildCandles(series, priceMin, priceMax, width, panels.price, paddingX)}
-        <path d="${ema20Path}" fill="none" stroke="#4fd1a6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${ema50Path}" fill="none" stroke="#8db9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${ema20Path}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${ema50Path}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
         ${buildVolumeBars(series, volumeMax, width, panels.volume, paddingX)}
         ${buildRsiGuides(width, panels.rsi, paddingX)}
         <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
         ${buildMacdHistogram(series, macdMin, macdMax, width, panels.macd, paddingX)}
         ${buildMacdZeroLine(macdMin, macdMax, width, panels.macd, paddingX)}
-        <path d="${macdPath}" fill="none" stroke="#4fd1a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${macdSignalPath}" fill="none" stroke="#ffb347" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${macdPath}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${macdSignalPath}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
         ${buildPanelLabels(width, panels, paddingX, chartPackage, latest, volumeMax)}
         ${buildChartLegend(width, paddingX)}
-        <text x="${paddingX}" y="24" fill="#93b7ac" font-size="12">${chartPackage.symbol} | ${firstDate} - ${lastDate} | source ${chartPackage.summary.source}</text>
-        <text x="${width - paddingX}" y="24" fill="#eaf5f0" font-size="12" text-anchor="end">${formatQuote(latest.close)}</text>
+        <text x="${paddingX}" y="24" fill="#787b86" font-size="11" font-family="-apple-system,BlinkMacSystemFont,'Trebuchet MS',sans-serif">${chartPackage.symbol} · ${firstDate} – ${lastDate} · ${chartPackage.summary.source}</text>
+        <text x="${width - paddingX}" y="24" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">${formatQuote(latest.close)}</text>
     `;
     setChartHoverState(buildIndexChartHoverState({
         points: series,
@@ -1334,13 +1497,13 @@ function paintPriceTab(chart, summary, insights, chartPackage) {
     const latest = series[series.length - 1];
     chart.innerHTML = `
         ${buildSinglePanelGrid(width, panel, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#4fd1a6", minValue, maxValue, width, panel, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ff7e6b", minValue, maxValue, width, panel, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#26a69a", minValue, maxValue, width, panel, paddingX)}
+        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ef5350", minValue, maxValue, width, panel, paddingX)}
         ${buildCandles(series, minValue, maxValue, width, panel, paddingX)}
-        <path d="${ema20Path}" fill="none" stroke="#4fd1a6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${ema50Path}" fill="none" stroke="#8db9ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka cena | ostatnie ${series.length} swiec</text>
-        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">${formatQuote(latest.close)}</text>
+        <path d="${ema20Path}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${ema50Path}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · cena · ${series.length} świec</text>
+        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">${formatQuote(latest.close)}</text>
         ${buildChartLegend(width, paddingX)}
     `;
     setChartHoverState(buildIndexChartHoverState({
@@ -1377,8 +1540,8 @@ function paintVolumeTab(chart, summary, insights, chartPackage) {
     chart.innerHTML = `
         ${buildSinglePanelGrid(width, panel, paddingX)}
         ${buildVolumeBars(series, volumeMax, width, panel, paddingX)}
-        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka wolumen</text>
-        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">max ${compactNumber(volumeMax)}</text>
+        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · wolumen</text>
+        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">max ${compactNumber(volumeMax)}</text>
     `;
     setChartHoverState(null);
     summary.innerHTML = `
@@ -1400,9 +1563,9 @@ function paintRsiTab(chart, summary, insights, chartPackage) {
     chart.innerHTML = `
         ${buildSinglePanelGrid(width, panel, paddingX)}
         ${buildRsiGuides(width, panel, paddingX)}
-        <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka RSI</text>
-        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
+        <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · RSI</text>
+        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
     `;
     setChartHoverState(null);
     summary.innerHTML = `
@@ -1431,10 +1594,10 @@ function paintMacdTab(chart, summary, insights, chartPackage) {
         ${buildSinglePanelGrid(width, panel, paddingX)}
         ${buildMacdZeroLine(minValue, maxValue, width, panel, paddingX)}
         ${buildMacdHistogram(series, minValue, maxValue, width, panel, paddingX)}
-        <path d="${macdPath}" fill="none" stroke="#4fd1a6" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${macdSignalPath}" fill="none" stroke="#ffb347" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path>
-        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${chartPackage.symbol} | zakladka MACD</text>
-        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">MACD ${percentFormatter.format(chartPackage.summary.macd)}</text>
+        <path d="${macdPath}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <path d="${macdSignalPath}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · MACD</text>
+        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">MACD ${percentFormatter.format(chartPackage.summary.macd)}</text>
         ${buildChartLegend(width, paddingX)}
     `;
     setChartHoverState(null);
@@ -1475,17 +1638,17 @@ function paintLifecycleChart(chart, summary, insights, lifecycleHistory, chartPa
     const currentY = projectPanelY(lifecycleHistory.summary.current_price, minValue, maxValue, panels.price.top, panels.price.height);
     chart.innerHTML = `
         ${buildMultiPanelGrid(width, panels, paddingX)}
-        ${buildPriceReferenceLine(lifecycleHistory.summary.ath_price, "ATH", "#ff7e6b", minValue, maxValue, width, panels.price, paddingX)}
+        ${buildPriceReferenceLine(lifecycleHistory.summary.ath_price, "ATH", "#ef5350", minValue, maxValue, width, panels.price, paddingX)}
         ${buildLifecycleCandlesSvg(candles, minValue, maxValue, width, panels.price, paddingX, minTimestamp, maxTimestamp)}
         ${buildLifecycleVolumeBars(candles, volumeMax, width, panels.volume, paddingX, minTimestamp, maxTimestamp)}
-        <line x1="${paddingX}" y1="${athY}" x2="${width - paddingX}" y2="${athY}" stroke="rgba(255,126,107,0.55)" stroke-dasharray="6 4" stroke-width="1"></line>
-        <line x1="${paddingX}" y1="${currentY}" x2="${width - paddingX}" y2="${currentY}" stroke="rgba(79,209,166,0.55)" stroke-dasharray="6 4" stroke-width="1"></line>
+        <line x1="${paddingX}" y1="${athY}" x2="${width - paddingX}" y2="${athY}" stroke="rgba(239,83,80,0.45)" stroke-dasharray="6 4" stroke-width="1"></line>
+        <line x1="${paddingX}" y1="${currentY}" x2="${width - paddingX}" y2="${currentY}" stroke="rgba(38,166,154,0.45)" stroke-dasharray="6 4" stroke-width="1"></line>
         ${buildLifecycleYearMarkers(candles, width, panels, paddingX, minTimestamp, maxTimestamp)}
-        <text x="${paddingX}" y="28" fill="#93b7ac" font-size="12">${lifecycleHistory.symbol} | cala historia | ${lifecycleHistory.summary.start_date} - ${lifecycleHistory.summary.end_date} | source ${String(lifecycleHistory.summary.history_source).toUpperCase()} | swiece ${lifecycleSeries.intervalLabel}</text>
-        <text x="${width - paddingX}" y="28" fill="#eaf5f0" font-size="12" text-anchor="end">${formatQuote(lifecycleHistory.summary.current_price)}</text>
-        <text x="${paddingX}" y="${athY - 8}" fill="#ffb4a8" font-size="10">ATH ${formatQuote(lifecycleHistory.summary.ath_price)} | ${lifecycleHistory.summary.ath_date}</text>
-        <text x="${paddingX}" y="${currentY - 8}" fill="#8ef7d0" font-size="10">NOW ${formatQuote(lifecycleHistory.summary.current_price)}</text>
-        <text x="${width - paddingX}" y="${panels.volume.top - 10}" fill="#93b7ac" font-size="11" text-anchor="end">wolumen max ${compactNumber(volumeMax)}</text>
+        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${lifecycleHistory.symbol} · historia · ${lifecycleHistory.summary.start_date} – ${lifecycleHistory.summary.end_date} · ${String(lifecycleHistory.summary.history_source).toUpperCase()} · ${lifecycleSeries.intervalLabel}</text>
+        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">${formatQuote(lifecycleHistory.summary.current_price)}</text>
+        <text x="${paddingX}" y="${athY - 8}" fill="#ef5350" font-size="10">ATH ${formatQuote(lifecycleHistory.summary.ath_price)} · ${lifecycleHistory.summary.ath_date}</text>
+        <text x="${paddingX}" y="${currentY - 8}" fill="#26a69a" font-size="10">NOW ${formatQuote(lifecycleHistory.summary.current_price)}</text>
+        <text x="${width - paddingX}" y="${panels.volume.top - 10}" fill="#787b86" font-size="11" text-anchor="end">vol max ${compactNumber(volumeMax)}</text>
         ${buildChartLegend(width, paddingX)}
     `;
     setChartHoverState(buildTimeChartHoverState({
@@ -1581,12 +1744,12 @@ function buildLifecycleCandlesSvg(candles, minValue, maxValue, width, panel, pad
         const highY = projectPanelY(point.high, minValue, maxValue, panel.top, panel.height);
         const lowY = projectPanelY(point.low, minValue, maxValue, panel.top, panel.height);
         const isUp = point.close >= point.open;
-        const color = isUp ? "#4fd1a6" : "#ff7e6b";
+        const color = isUp ? "#26a69a" : "#ef5350";
         const bodyY = Math.min(openY, closeY);
         const bodyHeight = Math.max(1.2, Math.abs(closeY - openY));
         return `
             <line x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}" stroke="${color}" stroke-width="1.1"></line>
-            <rect x="${x - bodyWidth / 2}" y="${bodyY}" width="${bodyWidth}" height="${bodyHeight}" fill="${color}" opacity="0.88" rx="1.2"></rect>
+            <rect x="${x - bodyWidth / 2}" y="${bodyY}" width="${bodyWidth}" height="${bodyHeight}" fill="${color}" opacity="0.88" rx="1"></rect>
         `;
     }).join("");
 }
@@ -1599,7 +1762,7 @@ function buildLifecycleVolumeBars(points, volumeMax, width, panel, paddingX, min
         const barWidth = Math.max(0.8, Math.min(8, Math.abs(nextX - x) * 0.72 || 4));
         const y = projectPanelY(point.volume || 0, 0, volumeMax, panel.top, panel.height);
         const height = Math.max(1.5, panel.top + panel.height - y);
-        const color = point.close >= point.open ? "rgba(79,209,166,0.7)" : "rgba(255,126,107,0.72)";
+        const color = point.close >= point.open ? "rgba(38,166,154,0.55)" : "rgba(239,83,80,0.55)";
         return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${height}" fill="${color}" rx="1"></rect>`;
     }).join("");
 }
@@ -1618,8 +1781,8 @@ function buildLifecycleYearMarkers(points, width, panels, paddingX, minTimestamp
         seenYears.add(year);
         const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
         markers.push(`
-            <line x1="${x}" y1="${panels.price.top}" x2="${x}" y2="${panels.volume.top + panels.volume.height}" stroke="rgba(255,255,255,0.05)" stroke-dasharray="3 6" stroke-width="1"></line>
-            <text x="${x}" y="${panels.volume.top + panels.volume.height + 18}" fill="#93b7ac" font-size="10" text-anchor="middle">${year}</text>
+            <line x1="${x}" y1="${panels.price.top}" x2="${x}" y2="${panels.volume.top + panels.volume.height}" stroke="rgba(42,46,57,0.8)" stroke-dasharray="3 6" stroke-width="1"></line>
+            <text x="${x}" y="${panels.volume.top + panels.volume.height + 18}" fill="#787b86" font-size="10" text-anchor="middle">${year}</text>
         `);
     });
     return markers.join("");
@@ -1797,9 +1960,9 @@ function renderChartHover(point) {
     `;
 
     overlay.innerHTML = `
-        <line x1="${point.x}" y1="${chartHoverState.overlayTop}" x2="${point.x}" y2="${chartHoverState.overlayBottom}" stroke="rgba(255,255,255,0.24)" stroke-dasharray="4 4" stroke-width="1"></line>
-        <line x1="${chartHoverState.paddingX}" y1="${point.closeY}" x2="${chartHoverState.width - chartHoverState.paddingX}" y2="${point.closeY}" stroke="rgba(255,255,255,0.18)" stroke-dasharray="4 4" stroke-width="1"></line>
-        <circle cx="${point.x}" cy="${point.closeY}" r="4.2" fill="#08141b" stroke="#f0b44a" stroke-width="2"></circle>
+        <line x1="${point.x}" y1="${chartHoverState.overlayTop}" x2="${point.x}" y2="${chartHoverState.overlayBottom}" stroke="rgba(120,123,134,0.4)" stroke-dasharray="4 4" stroke-width="1"></line>
+        <line x1="${chartHoverState.paddingX}" y1="${point.closeY}" x2="${chartHoverState.width - chartHoverState.paddingX}" y2="${point.closeY}" stroke="rgba(120,123,134,0.3)" stroke-dasharray="4 4" stroke-width="1"></line>
+        <circle cx="${point.x}" cy="${point.closeY}" r="4" fill="#131722" stroke="#2962ff" stroke-width="2"></circle>
     `;
 }
 
@@ -1835,11 +1998,11 @@ function buildSinglePanelGrid(width, panel, paddingX) {
     const columns = 6;
     const horizontal = Array.from({ length: rows + 1 }, (_, index) => {
         const y = panel.top + (panel.height / rows) * index;
-        return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1"></line>`;
+        return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.6)" stroke-width="1"></line>`;
     }).join("");
     const vertical = Array.from({ length: columns + 1 }, (_, index) => {
         const x = paddingX + ((width - paddingX * 2) / columns) * index;
-        return `<line x1="${x}" y1="${panel.top}" x2="${x}" y2="${panel.top + panel.height}" stroke="rgba(255,255,255,0.04)" stroke-width="1"></line>`;
+        return `<line x1="${x}" y1="${panel.top}" x2="${x}" y2="${panel.top + panel.height}" stroke="rgba(42,46,57,0.4)" stroke-width="1"></line>`;
     }).join("");
     return horizontal + vertical;
 }
@@ -1849,13 +2012,13 @@ function buildMultiPanelGrid(width, panels, paddingX) {
     const panelEntries = Object.values(panels);
     const verticalLines = Array.from({ length: columnCount + 1 }, (_, index) => {
         const x = paddingX + ((width - paddingX * 2) / columnCount) * index;
-        return `<line x1="${x}" y1="${panelEntries[0].top}" x2="${x}" y2="${panelEntries[panelEntries.length - 1].top + panelEntries[panelEntries.length - 1].height}" stroke="rgba(255,255,255,0.04)" stroke-width="1"></line>`;
+        return `<line x1="${x}" y1="${panelEntries[0].top}" x2="${x}" y2="${panelEntries[panelEntries.length - 1].top + panelEntries[panelEntries.length - 1].height}" stroke="rgba(42,46,57,0.4)" stroke-width="1"></line>`;
     }).join("");
     const horizontalLines = panelEntries.map((panel) => {
         const rows = panel === panels.price ? 4 : 2;
         return Array.from({ length: rows + 1 }, (_, index) => {
             const y = panel.top + (panel.height / rows) * index;
-            return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1"></line>`;
+            return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.6)" stroke-width="1"></line>`;
         }).join("");
     }).join("");
     return `${verticalLines}${horizontalLines}`;
@@ -1894,12 +2057,12 @@ function buildCandles(points, minValue, maxValue, width, panel, paddingX) {
         const highY = projectPanelY(point.high, minValue, maxValue, panel.top, panel.height);
         const lowY = projectPanelY(point.low, minValue, maxValue, panel.top, panel.height);
         const isUp = point.close >= point.open;
-        const color = isUp ? "#4fd1a6" : "#ff7e6b";
+        const color = isUp ? "#26a69a" : "#ef5350";
         const bodyY = Math.min(openY, closeY);
         const bodyHeight = Math.max(1.5, Math.abs(closeY - openY));
         return `
             <line x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}" stroke="${color}" stroke-width="1.4"></line>
-            <rect x="${x - candleWidth / 2}" y="${bodyY}" width="${candleWidth}" height="${bodyHeight}" fill="${color}" opacity="0.9" rx="1.5"></rect>
+            <rect x="${x - candleWidth / 2}" y="${bodyY}" width="${candleWidth}" height="${bodyHeight}" fill="${color}" opacity="0.9" rx="1"></rect>
         `;
     }).join("");
 }
@@ -1911,8 +2074,8 @@ function buildVolumeBars(points, maxVolume, width, panel, paddingX) {
         const x = projectX(index, points.length, width, paddingX);
         const barHeight = (point.volume / maxVolume) * panel.height;
         const y = panel.top + panel.height - barHeight;
-        const color = point.close >= point.open ? "rgba(79,209,166,0.7)" : "rgba(255,126,107,0.72)";
-        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${Math.max(1.5, barHeight)}" fill="${color}" rx="1.2"></rect>`;
+        const color = point.close >= point.open ? "rgba(38,166,154,0.55)" : "rgba(239,83,80,0.55)";
+        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${Math.max(1.5, barHeight)}" fill="${color}" rx="1"></rect>`;
     }).join("");
 }
 
@@ -1921,8 +2084,8 @@ function buildRsiGuides(width, panel, paddingX) {
     return levels.map((level) => {
         const y = projectPanelY(level, 0, 100, panel.top, panel.height);
         return `
-            <line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.12)" stroke-dasharray="4 4" stroke-width="1"></line>
-            <text x="${width - paddingX + 4}" y="${y + 4}" fill="#93b7ac" font-size="10">${level}</text>
+            <line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.8)" stroke-dasharray="4 4" stroke-width="1"></line>
+            <text x="${width - paddingX + 4}" y="${y + 4}" fill="#787b86" font-size="10">${level}</text>
         `;
     }).join("");
 }
@@ -1936,14 +2099,14 @@ function buildMacdHistogram(points, minValue, maxValue, width, panel, paddingX) 
         const valueY = projectPanelY(point.macd_hist, minValue, maxValue, panel.top, panel.height);
         const y = Math.min(zeroY, valueY);
         const height = Math.max(1.2, Math.abs(valueY - zeroY));
-        const color = point.macd_hist >= 0 ? "rgba(79,209,166,0.72)" : "rgba(255,126,107,0.72)";
+        const color = point.macd_hist >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)";
         return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${height}" fill="${color}" rx="1"></rect>`;
     }).join("");
 }
 
 function buildMacdZeroLine(minValue, maxValue, width, panel, paddingX) {
     const y = projectPanelY(0, minValue, maxValue, panel.top, panel.height);
-    return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(255,255,255,0.12)" stroke-dasharray="4 4" stroke-width="1"></line>`;
+    return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.8)" stroke-dasharray="4 4" stroke-width="1"></line>`;
 }
 
 function buildPriceReferenceLine(value, label, color, minValue, maxValue, width, panel, paddingX) {
@@ -1957,27 +2120,29 @@ function buildPriceReferenceLine(value, label, color, minValue, maxValue, width,
 function buildPanelLabels(width, panels, paddingX, chartPackage, latest, volumeMax) {
     const volumeLabel = compactNumber(volumeMax);
     return `
-        <text x="${paddingX}" y="${panels.price.top - 10}" fill="#eaf5f0" font-size="12">Price + EMA</text>
-        <text x="${paddingX}" y="${panels.volume.top - 10}" fill="#eaf5f0" font-size="12">Volume | max ${volumeLabel}</text>
-        <text x="${paddingX}" y="${panels.rsi.top - 10}" fill="#eaf5f0" font-size="12">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
-        <text x="${paddingX}" y="${panels.macd.top - 10}" fill="#eaf5f0" font-size="12">MACD ${percentFormatter.format(chartPackage.summary.macd)} / signal ${percentFormatter.format(chartPackage.summary.macd_signal)}</text>
-        <text x="${width - paddingX}" y="${panels.price.top - 10}" fill="#93b7ac" font-size="11" text-anchor="end">close ${formatQuote(latest.close)}</text>
+        <text x="${paddingX}" y="${panels.price.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">Price + EMA</text>
+        <text x="${paddingX}" y="${panels.volume.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">Volume</text>
+        <text x="${width - paddingX}" y="${panels.volume.top - 10}" fill="#787b86" font-size="10" text-anchor="end">max ${volumeLabel}</text>
+        <text x="${paddingX}" y="${panels.rsi.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
+        <text x="${paddingX}" y="${panels.macd.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">MACD ${percentFormatter.format(chartPackage.summary.macd)}</text>
+        <text x="${width - paddingX}" y="${panels.macd.top - 10}" fill="#787b86" font-size="10" text-anchor="end">sig ${percentFormatter.format(chartPackage.summary.macd_signal)}</text>
+        <text x="${width - paddingX}" y="${panels.price.top - 10}" fill="#787b86" font-size="10" text-anchor="end">${formatQuote(latest.close)}</text>
     `;
 }
 
 function buildChartLegend(width, paddingX) {
     const items = [
-        { label: "EMA20", color: "#4fd1a6" },
-        { label: "EMA50", color: "#8db9ff" },
+        { label: "EMA20", color: "#2962ff" },
+        { label: "EMA50", color: "#ff6d00" },
         { label: "RSI", color: "#f0b44a" },
-        { label: "MACD", color: "#4fd1a6" },
-        { label: "Signal", color: "#ffb347" },
+        { label: "MACD", color: "#2962ff" },
+        { label: "Signal", color: "#ff6d00" },
     ];
     return items.map((item, index) => {
         const x = paddingX + index * 86;
         return `
-            <line x1="${x}" y1="548" x2="${x + 16}" y2="548" stroke="${item.color}" stroke-width="3"></line>
-            <text x="${x + 22}" y="552" fill="#93b7ac" font-size="10">${item.label}</text>
+            <line x1="${x}" y1="548" x2="${x + 16}" y2="548" stroke="${item.color}" stroke-width="2"></line>
+            <text x="${x + 22}" y="552" fill="#787b86" font-size="10">${item.label}</text>
         `;
     }).join("");
 }

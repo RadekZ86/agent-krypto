@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#0a1a22">
+    <meta name="theme-color" content="#131722">
     <meta name="description" content="Dashboard do analizy rynku krypto z paper tradingiem i AI">
     
     <!-- PWA -->
@@ -226,7 +226,7 @@
                             <div id="api-usage-summary" class="stack-list compact"></div>
                         </div>
                     </div>
-                    
+
                     <div class="card summary-card">
                         <div class="card-header">
                             <h3>Szybki podglad</h3>
@@ -242,6 +242,34 @@
                         </div>
                         <div class="card-body scrollable">
                             <div id="bought-coins-menu" class="coin-menu"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Watchlist Panel like TradingView -->
+                    <div class="card watchlist-card">
+                        <div class="card-header">
+                            <h3>Watchlist</h3>
+                        </div>
+                        <div class="card-body scrollable">
+                            <div id="watchlist-panel" class="watchlist"></div>
+                        </div>
+                    </div>
+
+                    <div class="card private-learning-card">
+                        <div class="card-header">
+                            <h3>Uczenie z Binance</h3>
+                        </div>
+                        <div class="card-body scrollable">
+                            <div id="private-learning-panel" class="stack-list compact"></div>
+                        </div>
+                    </div>
+
+                    <div class="card trade-ranking-card">
+                        <div class="card-header">
+                            <h3>Ranking trade'ów</h3>
+                        </div>
+                        <div class="card-body scrollable">
+                            <div id="trade-ranking-panel" class="stack-list compact"></div>
                         </div>
                     </div>
                 </div>
@@ -451,7 +479,7 @@
                                         <input type="checkbox" id="api-testnet">
                                         <span>Testnet</span>
                                     </label>
-                                    <select id="api-permissions" class="small-select">
+                                    <select id="api-permissions" class="small-select" title="Uprawnienia klucza API">
                                         <option value="read">Tylko odczyt</option>
                                         <option value="trade">Trading</option>
                                     </select>
@@ -468,7 +496,7 @@
                     <div class="card binance-account-card">
                         <div class="card-header">
                             <h3>Konto Binance</h3>
-                            <select id="binance-key-selector" class="small-select">
+                            <select id="binance-key-selector" class="small-select" title="Wybierz klucz API Binance">
                                 <option value="">Wybierz klucz API</option>
                             </select>
                         </div>
