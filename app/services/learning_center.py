@@ -15,6 +15,8 @@ from app.services.analysis_frame import build_indicator_frame
 from app.services.market_data import load_symbol_market_rows
 from app.services.probability_engine import ProbabilityEngine
 
+_MISS = object()  # sentinel for cache miss
+
 
 LEARNING_ARTICLES = [
     {
@@ -178,9 +180,25 @@ KNOWLEDGE_BASE = [
 
 
 class LearningCenter:
+    PRIVATE_LEARNING_TTL = 60       # seconds
+    TRADE_RANKING_TTL = 300         # seconds
+
     def __init__(self) -> None:
         self.probability_engine = ProbabilityEngine()
         self._lifecycle_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
+        self._private_learning_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+        self._trade_ranking_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+
+    def _cache_get(self, cache: dict, key: str, ttl: int):
+        """Return cached value if still fresh, otherwise None sentinel."""
+        entry = cache.get(key)
+        if entry is None:
+            return _MISS
+        ts, value = entry
+        import time
+        if time.time() - ts > ttl:
+            return _MISS
+        return value
 
     def build_private_learning_state(
         self,
@@ -189,6 +207,10 @@ class LearningCenter:
         preferred_quotes: list[str] | None = None,
     ) -> dict[str, Any] | None:
         preferred_quote = (preferred_quotes or ["USDT"])[0].upper()
+        cache_key = f"{getattr(client, 'api_key', '')}:{preferred_quote}"
+        cached = self._cache_get(self._private_learning_cache, cache_key, self.PRIVATE_LEARNING_TTL)
+        if cached is not _MISS:
+            return cached
         portfolio = client.get_portfolio_value(preferred_quote)
         if not portfolio or "error" in portfolio:
             return None
@@ -264,7 +286,8 @@ class LearningCenter:
         if tracked_holdings:
             next_steps.append("Priorytetyzuj nauke na coinach, ktore rzeczywiscie wystepuja w portfelu Binance, bo tam agent ma najbardziej wartosciowy feedback z realnej ekspozycji.")
 
-        return {
+        import time as _time
+        result = {
             "enabled": True,
             "quote_currency": preferred_quote,
             "total_value": round(total_value, 2),
@@ -276,6 +299,8 @@ class LearningCenter:
             "findings": findings,
             "next_steps": next_steps,
         }
+        self._private_learning_cache[cache_key] = (_time.time(), result)
+        return result
 
     def build_trade_history_ranking(
         self,
@@ -284,6 +309,10 @@ class LearningCenter:
         preferred_quotes: list[str] | None = None,
     ) -> dict[str, Any] | None:
         preferred_quote = (preferred_quotes or ["USDT"])[0].upper()
+        cache_key = f"{getattr(client, 'api_key', '')}:{preferred_quote}"
+        cached = self._cache_get(self._trade_ranking_cache, cache_key, self.TRADE_RANKING_TTL)
+        if cached is not _MISS:
+            return cached
         ranking_entries: list[dict[str, Any]] = []
 
         for symbol in tracked_symbols:
@@ -328,6 +357,8 @@ class LearningCenter:
             })
 
         if not ranking_entries:
+            import time as _time
+            self._trade_ranking_cache[cache_key] = (_time.time(), None)
             return None
 
         ranking_entries.sort(key=lambda e: e["trade_count"], reverse=True)
@@ -352,7 +383,8 @@ class LearningCenter:
         if high_freq:
             insights.append(f"{len(high_freq)} par z czestotliwoscia > 1 trade/dzien. Sprawdz, czy czeste transakcje nie generuja nadmiernych prowizji.")
 
-        return {
+        import time as _time
+        result = {
             "enabled": True,
             "quote_currency": preferred_quote,
             "total_realized_pnl": round(total_realized, 2),
@@ -362,6 +394,8 @@ class LearningCenter:
             "ranking": ranking_entries[:10],
             "insights": insights,
         }
+        self._trade_ranking_cache[cache_key] = (_time.time(), result)
+        return result
 
     def build_market_summary(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
         rows = load_symbol_market_rows(session, symbol, limit=limit)
