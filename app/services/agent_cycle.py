@@ -67,12 +67,12 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": "no balance"})
                     continue
 
-                # Dynamic allocation: use configured allocation or 10% of available balance, whichever is smaller
+                # Dynamic allocation: use configured allocation or 30% of available balance, whichever is smaller
                 configured = settings.allocation_quote.get(symbol, 40.0)
-                max_from_balance = quote_bal * 0.10
+                max_from_balance = quote_bal * 0.30
                 allocation = min(configured, max_from_balance)
-                # Ensure minimum order value (~11 PLN / 5 USDT)
-                min_order = 11.0 if quote_asset == "PLN" else 5.0
+                # Ensure minimum order value (Binance minNotional is 25 PLN / 10 USDT)
+                min_order = 25.0 if quote_asset == "PLN" else 10.0
                 if allocation < min_order:
                     if quote_bal >= min_order:
                         allocation = min_order

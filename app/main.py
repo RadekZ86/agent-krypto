@@ -404,9 +404,14 @@ def _build_dashboard_payload(
             )
             if user_trading_mode == "LIVE":
                 try:
-                    portfolio = client.get_portfolio_value(settings.exchange_quote_currency)
-                    if isinstance(portfolio, dict) and "error" not in portfolio:
-                        binance_wallet = portfolio
+                    # Try PLN first (Binance PL), then configured exchange quote, then USDT
+                    for try_quote in ["PLN", settings.exchange_quote_currency, "USDT"]:
+                        portfolio = client.get_portfolio_value(try_quote)
+                        if isinstance(portfolio, dict) and "error" not in portfolio:
+                            total = portfolio.get("total_value", 0)
+                            if total > 0:
+                                binance_wallet = portfolio
+                                break
                 except Exception:
                     pass
 
