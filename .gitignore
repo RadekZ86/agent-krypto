@@ -5,7 +5,11 @@ __pycache__/
 *.pyo
 *.pyd
 agent_krypto.db
+agent_krypto.db-shm
+agent_krypto.db-wal
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 logs/*.log
 logs/*.pid
