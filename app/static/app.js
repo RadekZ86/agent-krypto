@@ -615,12 +615,14 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
         chartPackageCache = {};
     }
     syncSelectedSymbol(payload);
-    paintWallet(payload.wallet);
+    const isLive = (payload.config?.trading_mode || payload.system_status?.trading_mode) === "LIVE";
+    const bw = isLive && payload.binance_wallet ? payload.binance_wallet : null;
+    paintWallet(payload.wallet, bw);
     paintModeStrip(payload.system_status, payload.config, payload.wallet);
     paintAgentMode(payload.system_status, payload.config);
-    paintCapitalSummary(payload.wallet);
+    paintCapitalSummary(payload.wallet, bw);
     paintApiUsage(payload.api_usage);
-    paintBoughtCoins(payload.wallet.positions);
+    paintBoughtCoins(bw ? (bw.holdings || []).filter(h => h.value > 1).map(h => ({symbol: h.asset, buy_value: h.value, quantity: h.total, buy_price: h.value / (h.total || 1)})) : payload.wallet.positions);
     paintWatchlist(payload.market);
     paintPrivateLearning(payload.private_learning);
     paintTradeRanking(payload.trade_ranking);
@@ -653,16 +655,33 @@ function paintChartError(message) {
     setChartHoverState(null);
 }
 
-function paintWallet(wallet) {
-    document.getElementById("cash-balance").textContent = formatQuote(wallet.cash_balance);
-    document.getElementById("equity").textContent = formatQuote(wallet.equity);
-    document.getElementById("buy-count").textContent = String(wallet.buy_count);
-    document.getElementById("sell-count").textContent = String(wallet.sell_count);
-    document.getElementById("open-positions-count").textContent = String(wallet.open_positions_count);
-    document.getElementById("gross-profit").textContent = formatQuote(wallet.gross_profit);
-    document.getElementById("gross-loss").textContent = formatQuote(wallet.gross_loss);
-    document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
-    document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
+function paintWallet(wallet, binanceWallet) {
+    if (binanceWallet) {
+        const totalValue = binanceWallet.total_value || 0;
+        const usdtHolding = (binanceWallet.holdings || []).find(h => h.asset === "USDT" || h.asset === "BUSD" || h.asset === "FDUSD");
+        const cashValue = usdtHolding ? usdtHolding.value : 0;
+        const lockedValue = totalValue - cashValue;
+        const holdingsCount = (binanceWallet.holdings || []).filter(h => h.value > 1 && h.asset !== "USDT" && h.asset !== "BUSD" && h.asset !== "FDUSD").length;
+        document.getElementById("cash-balance").textContent = formatQuote(cashValue);
+        document.getElementById("equity").textContent = formatQuote(totalValue);
+        document.getElementById("open-positions-count").textContent = String(holdingsCount);
+        document.getElementById("buy-count").textContent = String(wallet.buy_count);
+        document.getElementById("sell-count").textContent = String(wallet.sell_count);
+        document.getElementById("gross-profit").textContent = formatQuote(wallet.gross_profit);
+        document.getElementById("gross-loss").textContent = formatQuote(wallet.gross_loss);
+        document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
+        document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
+    } else {
+        document.getElementById("cash-balance").textContent = formatQuote(wallet.cash_balance);
+        document.getElementById("equity").textContent = formatQuote(wallet.equity);
+        document.getElementById("buy-count").textContent = String(wallet.buy_count);
+        document.getElementById("sell-count").textContent = String(wallet.sell_count);
+        document.getElementById("open-positions-count").textContent = String(wallet.open_positions_count);
+        document.getElementById("gross-profit").textContent = formatQuote(wallet.gross_profit);
+        document.getElementById("gross-loss").textContent = formatQuote(wallet.gross_loss);
+        document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
+        document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
+    }
     paintQuickSummary(wallet);
     
     // Mobile hero card update
@@ -900,17 +919,33 @@ function paintAgentMode(systemStatus, config) {
     ` : "";
 }
 
-function paintCapitalSummary(wallet) {
+function paintCapitalSummary(wallet, binanceWallet) {
     const container = document.getElementById("capital-summary");
-    const displayStartPln = dashboardState?.config?.start_balance_display_pln || 1000;
-    container.innerHTML = `
-        ${buildQuickCard("Start", formatQuote(wallet.starting_balance), `Kapital poczatkowy agenta. Reset przywraca bazowe ${percentFormatter.format(displayStartPln)} PLN.`)}
-        ${buildQuickCard("Wydal na zakupy", formatQuote(wallet.spent_on_buys), "Laczna wartosc wejsc BUY")}
-        ${buildQuickCard("Wrocilo ze sprzedazy", formatQuote(wallet.capital_returned), "Kapital odzyskany po SELL")}
-        ${buildQuickCard("Fee lacznie", formatQuote(wallet.fees_paid), "Prowizje kupna i sprzedazy")}
-        ${buildQuickCard("Zostalo gotowki", formatQuote(wallet.cash_balance), "To moze jeszcze wydac agent")}
-        ${buildQuickCard("Zablokowane", formatQuote(wallet.capital_locked_cost), "Kapital siedzi w otwartych pozycjach")}
-    `;
+    if (binanceWallet) {
+        const totalValue = binanceWallet.total_value || 0;
+        const usdtHolding = (binanceWallet.holdings || []).find(h => h.asset === "USDT" || h.asset === "BUSD" || h.asset === "FDUSD");
+        const cashValue = usdtHolding ? usdtHolding.value : 0;
+        const lockedValue = totalValue - cashValue;
+        const holdingsCount = (binanceWallet.holdings || []).filter(h => h.value > 1 && h.asset !== "USDT" && h.asset !== "BUSD" && h.asset !== "FDUSD").length;
+        container.innerHTML = `
+            ${buildQuickCard("Portfel Binance", formatQuote(totalValue), "Lacznie wszystkie aktywa na Binance")}
+            ${buildQuickCard("Wolne USDT", formatQuote(cashValue), "Gotowka dostepna do handlu")}
+            ${buildQuickCard("W pozycjach", formatQuote(lockedValue), `${holdingsCount} aktywow w portfelu`)}
+            ${buildQuickCard("Fee lacznie (paper)", formatQuote(wallet.fees_paid), "Prowizje z symulacji paper")}
+            ${buildQuickCard("Gotowka paper", formatQuote(wallet.cash_balance), "Rownolegle saldo paper trading")}
+            ${buildQuickCard("Zablokowane paper", formatQuote(wallet.capital_locked_cost), "Paper pozycje otwarte")}
+        `;
+    } else {
+        const displayStartPln = dashboardState?.config?.start_balance_display_pln || 1000;
+        container.innerHTML = `
+            ${buildQuickCard("Start", formatQuote(wallet.starting_balance), `Kapital poczatkowy agenta. Reset przywraca bazowe ${percentFormatter.format(displayStartPln)} PLN.`)}
+            ${buildQuickCard("Wydal na zakupy", formatQuote(wallet.spent_on_buys), "Laczna wartosc wejsc BUY")}
+            ${buildQuickCard("Wrocilo ze sprzedazy", formatQuote(wallet.capital_returned), "Kapital odzyskany po SELL")}
+            ${buildQuickCard("Fee lacznie", formatQuote(wallet.fees_paid), "Prowizje kupna i sprzedazy")}
+            ${buildQuickCard("Zostalo gotowki", formatQuote(wallet.cash_balance), "To moze jeszcze wydac agent")}
+            ${buildQuickCard("Zablokowane", formatQuote(wallet.capital_locked_cost), "Kapital siedzi w otwartych pozycjach")}
+        `;
+    }
 }
 
 function paintApiUsage(apiUsage) {

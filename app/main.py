@@ -388,6 +388,7 @@ def _build_dashboard_payload(
 
     private_learning = None
     trade_ranking = None
+    binance_wallet = None
     if current_user is not None:
         _, client = get_user_binance_client(session, current_user.id)
         if client is not None:
@@ -401,6 +402,13 @@ def _build_dashboard_payload(
                 settings.tracked_symbols,
                 settings.preferred_trade_quotes,
             )
+            if user_trading_mode == "LIVE":
+                try:
+                    portfolio = client.get_portfolio_value(settings.quote_currency)
+                    if isinstance(portfolio, dict) and "error" not in portfolio:
+                        binance_wallet = portfolio
+                except Exception:
+                    pass
 
     return {
         "wallet": wallet_service.get_snapshot(session),
@@ -439,6 +447,7 @@ def _build_dashboard_payload(
         "backtest": backtest_payload,
         "private_learning": private_learning,
         "trade_ranking": trade_ranking,
+        "binance_wallet": binance_wallet,
         "api_usage": {
             "calls": int(api_usage[0] or 0),
             "input_tokens": int(api_usage[1] or 0),
