@@ -1,111 +1,103 @@
 # Deployment Agent Krypto na mydevil.net
 
-## Wymagania
-- Konto na mydevil.net (masz: MagicParty)
-- Konto GitHub
+## Aktualna konfiguracja
 
-## Krok 1: Utwórz repozytorium na GitHub
+**URL aplikacji:** http://agentkrypto.magicparty.usermd.net  
+**Serwer:** s84.mydevil.net  
+**Użytkownik:** MagicParty  
+**Port:** 12345  
+**GitHub:** https://github.com/RadekZ86/agent-krypto
 
-1. Wejdź na https://github.com/new
-2. Nazwa repo: `agent-krypto`
-3. Ustaw jako **Private** (prywatne)
-4. Nie zaznaczaj "Initialize with README"
-5. Kliknij "Create repository"
+## Uruchamianie lokalne
 
-## Krok 2: Wypchnij kod na GitHub
+### Na komputerze (Windows)
 
-W terminalu VS Code:
+1. Otwórz terminal w folderze projektu:
 ```powershell
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/TWOJ_USERNAME/agent-krypto.git
-git push -u origin main
+cd "C:\Users\User\Documents\Agent Krypto"
 ```
 
-## Krok 3: Skonfiguruj GitHub Secrets
+2. Aktywuj środowisko wirtualne:
+```powershell
+.venv\Scripts\Activate.ps1
+```
 
-1. Wejdź do Settings → Secrets and variables → Actions
-2. Dodaj następujące sekrety:
-   - `SSH_USER`: `MagicParty`
-   - `SSH_PASSWORD`: (twoje nowe hasło do mydevil)
+3. Uruchom aplikację:
+```powershell
+uvicorn app.main:app --reload --port 8000
+```
 
-## Krok 4: Skonfiguruj serwer mydevil.net
+4. Otwórz w przeglądarce: **http://localhost:8000**
 
-### 4.1 Połącz się przez SSH
+### Na serwerze mydevil.net
+
+Aplikacja działa automatycznie. Aby zrestartować:
 ```bash
 ssh MagicParty@s84.mydevil.net
+pkill -f "uvicorn app.main:app.*12345"
+cd ~/domains/agentkrypto.magicparty.usermd.net/public_python
+nohup /home/MagicParty/.local/bin/uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
 ```
 
-### 4.2 Utwórz stronę w panelu DevilWEB
-1. Wejdź na https://panel84.mydevil.net/
-2. Strony WWW → Dodaj stronę
-3. Typ: **Własna aplikacja (proxy)**
-4. Domena: `MagicParty.usermd.net`
-5. Port: `8000`
+## GitHub Actions
 
-### 4.3 Utwórz katalog i sklonuj repo
+Automatyczny deployment uruchamia się przy każdym `git push` do brancha `master`.
+
+### Ręczne uruchomienie deploy:
+1. Wejdź na: https://github.com/RadekZ86/agent-krypto/actions
+2. Kliknij "Deploy to MyDevil"
+3. Kliknij "Run workflow"
+
+### Sprawdzenie statusu:
+```powershell
+& "C:\Program Files\GitHub CLI\gh.exe" run list --repo RadekZ86/agent-krypto --limit 3
+```
+
+## Konfiguracja serwera (już wykonana)
+
+### Subdomena
 ```bash
-mkdir -p ~/domains/MagicParty.usermd.net/app
-cd ~/domains/MagicParty.usermd.net/app
-git clone https://github.com/TWOJ_USERNAME/agent-krypto.git .
+devil www add agentkrypto.magicparty.usermd.net proxy localhost 12345
 ```
 
-### 4.4 Skonfiguruj środowisko Python
+### Certyfikat SSL
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+devil ssl www add 185.36.169.188 le le agentkrypto.magicparty.usermd.net
 ```
 
-### 4.5 Skonfiguruj plik .env
+### Port
 ```bash
-cp .env.example .env
-nano .env
+devil port add tcp 12345
 ```
-Ustaw:
-- `OPENAI_API_KEY=` (twój klucz OpenAI)
-- `DATABASE_URL=sqlite:///./agent_krypto.db`
 
-### 4.6 Utwórz daemon do uruchomienia aplikacji
+### BinExec (uruchamianie własnych programów)
 ```bash
-devil daemon add agent-krypto /usr/home/MagicParty/domains/MagicParty.usermd.net/app/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-devil daemon restart agent-krypto
+devil binexec on
 ```
 
-### 4.7 Sprawdź czy działa
+### Autostart (cron)
 ```bash
-devil daemon status agent-krypto
-curl http://127.0.0.1:8000
+echo '@reboot /usr/home/MagicParty/domains/agentkrypto.magicparty.usermd.net/public_python/start_app.sh' | crontab -
 ```
-
-## Krok 5: Automatyczny deployment
-
-Po każdym `git push` do brancha `main`, GitHub Actions automatycznie:
-1. Połączy się z serwerem
-2. Pobierze najnowszy kod
-3. Zainstaluje zależności
-4. Zrestartuje aplikację
-
-## Dostęp do aplikacji
-
-Po konfiguracji aplikacja będzie dostępna pod:
-**https://MagicParty.usermd.net**
 
 ## Rozwiązywanie problemów
 
-### Sprawdź logi daemona
+### Sprawdź czy uvicorn działa:
 ```bash
-devil daemon log agent-krypto
+ssh MagicParty@s84.mydevil.net "ps aux | grep uvicorn"
 ```
 
-### Restart aplikacji
+### Sprawdź logi:
 ```bash
-devil daemon restart agent-krypto
+ssh MagicParty@s84.mydevil.net "cat /tmp/uvicorn_agentkrypto.log | tail -50"
 ```
 
-### Sprawdź czy port jest zajęty
+### Sprawdź lokalnie:
 ```bash
-netstat -tlnp | grep 8000
+ssh MagicParty@s84.mydevil.net "curl -s http://127.0.0.1:12345/"
 ```
+
+## Sekrety GitHub (już skonfigurowane)
+
+- `SSH_USER`: MagicParty
+- `SSH_PASSWORD`: (hasło do mydevil)
