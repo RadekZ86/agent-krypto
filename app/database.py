@@ -45,3 +45,6 @@ def init_db() -> None:
             if "trading_mode" not in columns:
                 conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN trading_mode VARCHAR(16) DEFAULT 'PAPER'"))
                 conn.commit()
+            if "agent_mode" not in columns:
+                conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN agent_mode VARCHAR(16) DEFAULT 'normal'"))
+                conn.commit()

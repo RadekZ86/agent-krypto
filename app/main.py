@@ -92,6 +92,7 @@ def serialize_user(user: User) -> dict[str, object]:
         "email": user.email,
         "username": user.username,
         "trading_mode": getattr(user, "trading_mode", "PAPER"),
+        "agent_mode": getattr(user, "agent_mode", "normal"),
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
 
@@ -234,14 +235,24 @@ def ai_insight(request: Request, symbol: str | None = None) -> JSONResponse:
 
 
 @app.post("/api/agent-mode/{mode}")
-def set_agent_mode(mode: str) -> JSONResponse:
+def set_agent_mode(mode: str, request: Request) -> JSONResponse:
+    current_user = resolve_request_user(request)
     with SessionLocal() as session:
-        try:
-            selected_mode = runtime_state.set_agent_mode(session, mode)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        payload = _build_dashboard_payload(session)
-    return JSONResponse({"mode": selected_mode, "dashboard": payload})
+        normalized = mode.strip().lower()
+        if normalized not in settings.agent_mode_profiles:
+            raise HTTPException(status_code=400, detail=f"Nieznany tryb agenta: {mode}")
+
+        if current_user is not None:
+            db_user = session.get(User, current_user.id)
+            if db_user is not None:
+                db_user.agent_mode = normalized
+                session.commit()
+                current_user = db_user
+        else:
+            runtime_state.set_agent_mode(session, normalized)
+
+        payload = _build_dashboard_payload(session, current_user=current_user)
+    return JSONResponse({"mode": normalized, "dashboard": payload})
 
 
 @app.post("/api/paper/reset")
@@ -279,6 +290,11 @@ def _build_dashboard_payload(
     current_user: User | None = None,
 ) -> dict[str, object]:
     active_profile = runtime_state.get_active_profile(session)
+    if current_user is not None:
+        user_mode = getattr(current_user, "agent_mode", None) or "normal"
+        user_profile = settings.agent_mode_profiles.get(user_mode, settings.agent_mode_profiles[settings.default_agent_mode]).copy()
+        user_profile["id"] = user_mode
+        active_profile = user_profile
     display_currency = runtime_state.get_display_currency(session)
     usd_to_display_rate, rate_source = currency_service.get_rate(settings.quote_currency, display_currency)
     market_rows: list[dict[str, object]] = []

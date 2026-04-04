@@ -21,6 +21,7 @@ class User(Base):
     salt: Mapped[str] = mapped_column(String(32))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     trading_mode: Mapped[str] = mapped_column(String(16), default="PAPER")  # PAPER or LIVE
+    agent_mode: Mapped[str] = mapped_column(String(16), default="normal")  # cautious/normal/risky
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     

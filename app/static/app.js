@@ -2476,6 +2476,9 @@ async function switchAgentMode(mode) {
         throw new Error("Nie udalo sie zmienic trybu agenta.");
     }
     const payload = await response.json();
+    if (currentUser) {
+        currentUser.agent_mode = payload.mode;
+    }
     await applyDashboardPayload(payload.dashboard, true);
     setStatus(`Tryb agenta aktywny: ${payload.mode}`);
 }
