@@ -35,11 +35,14 @@ async function checkAuthStatus() {
             loadUserApiKeys();
         } else {
             currentUser = null;
-            showLoginScreen();
+            // Demo mode - skip login screen, allow app usage without auth
+            showApp();
+            updateUserMenu();
         }
     } catch (error) {
         console.error('Auth check failed:', error);
-        showLoginScreen();
+        // Demo mode - show app even if auth check fails
+        showApp();
     }
 }
 
@@ -64,14 +67,64 @@ function showApp() {
 function updateUserMenu() {
     const userMenuName = document.getElementById('user-menu-name');
     const userEmail = document.querySelector('.user-email');
+    const userDropdown = document.getElementById('user-dropdown');
     
     if (currentUser) {
         if (userMenuName) userMenuName.textContent = currentUser.username || 'Konto';
         if (userEmail) userEmail.textContent = currentUser.email || '';
+        if (userDropdown) {
+            userDropdown.innerHTML = `
+                <div class="dropdown-header">
+                    <span class="user-email">${currentUser.email || ''}</span>
+                </div>
+                <div class="dropdown-divider"></div>
+                <button class="dropdown-item" data-action="api-keys">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                    Klucze API
+                </button>
+                <button class="dropdown-item" data-action="logout">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    Wyloguj
+                </button>
+            `;
+            rebindDropdownHandlers();
+        }
     } else {
-        if (userMenuName) userMenuName.textContent = 'Konto';
-        if (userEmail) userEmail.textContent = '-';
+        if (userMenuName) userMenuName.textContent = 'Demo';
+        if (userEmail) userEmail.textContent = 'Tryb demonstracyjny';
+        if (userDropdown) {
+            userDropdown.innerHTML = `
+                <div class="dropdown-header">
+                    <span class="user-email">Tryb demonstracyjny</span>
+                </div>
+                <div class="dropdown-divider"></div>
+                <button class="dropdown-item" data-action="login">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                    Zaloguj się
+                </button>
+            `;
+            rebindDropdownHandlers();
+        }
     }
+}
+
+function rebindDropdownHandlers() {
+    const userDropdown = document.getElementById('user-dropdown');
+    if (!userDropdown) return;
+    
+    userDropdown.querySelectorAll('.dropdown-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const action = item.dataset.action;
+            if (action === 'logout') {
+                handleLogout();
+            } else if (action === 'api-keys') {
+                switchView('settings');
+            } else if (action === 'login') {
+                showLoginScreen();
+            }
+            userDropdown.classList.add('hidden');
+        });
+    });
 }
 
 async function handleLogin(email, password) {
@@ -390,18 +443,6 @@ function initAuthUI() {
         
         document.addEventListener('click', () => {
             userDropdown.classList.add('hidden');
-        });
-        
-        userDropdown.querySelectorAll('.dropdown-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const action = item.dataset.action;
-                if (action === 'logout') {
-                    handleLogout();
-                } else if (action === 'api-keys') {
-                    switchView('settings');
-                }
-                userDropdown.classList.add('hidden');
-            });
         });
     }
     
