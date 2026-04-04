@@ -13,24 +13,38 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy via SSH
+      - name: Create deployment package
+        run: |
+          zip -r app.zip app/ -x "*.pyc" -x "*__pycache__*"
+
+      - name: Deploy via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: s84.mydevil.net
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          source: "app.zip,requirements.txt"
+          target: "~/domains/agentkrypto.magicparty.usermd.net/public_python/"
+
+      - name: Install and restart
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: s84.mydevil.net
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            cd ~/domains/MagicParty.usermd.net/app
+            cd ~/domains/agentkrypto.magicparty.usermd.net/public_python
             
-            # Pobierz najnowszy kod
-            git fetch origin main
-            git reset --hard origin/main
+            # Rozpakuj nowy kod
+            unzip -o app.zip
+            rm app.zip
             
-            # Aktywuj venv i zainstaluj zależności
-            source .venv/bin/activate
-            pip install -r requirements.txt --quiet
+            # Zainstaluj zależności
+            pip install --user -r requirements.txt --quiet
             
-            # Restart aplikacji
-            devil daemon restart agent-krypto || echo "Daemon restart failed - check config"
+            # Zatrzymaj obecny uvicorn i uruchom nowy
+            pkill -f "uvicorn app.main:app.*12345" || true
+            sleep 2
+            nohup /home/MagicParty/.local/bin/uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
             
             echo "Deploy completed!"
