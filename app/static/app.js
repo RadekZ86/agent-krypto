@@ -2559,6 +2559,44 @@ function initViewSwitching() {
             }
         });
     });
+    
+    // Mobile accordion for dashboard cards
+    initMobileAccordion();
+    window.addEventListener("resize", initMobileAccordion);
+}
+
+function initMobileAccordion() {
+    const isMobile = window.innerWidth <= 768;
+    const dashCards = document.querySelectorAll(".dashboard-grid > .card");
+    
+    dashCards.forEach(card => {
+        const header = card.querySelector(":scope > .card-header");
+        const body = card.querySelector(":scope > .card-body");
+        if (!header || !body) return;
+        
+        // Remove old listener by cloning
+        if (header._mobileClone) return;
+        
+        if (isMobile) {
+            if (!header._mobileReady) {
+                header._mobileReady = true;
+                // Start collapsed on mobile
+                header.classList.add("m-collapsed");
+                body.classList.add("m-hidden");
+                
+                header.addEventListener("click", function mobileTap(e) {
+                    if (window.innerWidth > 768) return;
+                    e.stopPropagation();
+                    const isCollapsed = header.classList.toggle("m-collapsed");
+                    body.classList.toggle("m-hidden", isCollapsed);
+                });
+            }
+        } else {
+            // Desktop: ensure everything visible
+            header.classList.remove("m-collapsed");
+            body.classList.remove("m-hidden");
+        }
+    });
 }
 
 // ==================== BUTTON EVENT HANDLERS ====================
