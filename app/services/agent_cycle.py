@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 def _mirror_to_live_users(session: Session, symbol: str, action: str, market_price: float) -> list[dict]:
-    """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key."""
+    """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key.
+    Auto-detects available trading pairs and adjusts allocation to user's balance."""
     from app.models import User, UserAPIKey
     from app.services.auth import APIKeyService
     from app.services.binance_api import BinanceService
@@ -49,10 +50,37 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
             testnet=trade_key.is_testnet,
         )
 
-        pair = settings.binance_symbols.get(symbol, f"{symbol}{settings.exchange_quote_currency}")
         try:
+            balances = client.get_balances()
+            if isinstance(balances, list) and len(balances) > 0 and "error" in balances[0]:
+                logger.warning("LIVE %s: blad pobierania salda: %s", user.username, balances[0]["error"])
+                continue
+
             if action == "BUY":
-                allocation = settings.allocation_quote.get(symbol, 40.0)
+                pair, quote_asset, quote_bal = client.find_best_pair(symbol, balances)
+                if pair is None:
+                    logger.info("LIVE %s: brak dostepnej pary dla %s", user.username, symbol)
+                    results.append({"user": user.username, "symbol": symbol, "action": action, "status": "skip", "detail": "no pair"})
+                    continue
+                if quote_bal <= 0:
+                    logger.info("LIVE %s: brak srodkow %s dla %s", user.username, quote_asset, pair)
+                    results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": "no balance"})
+                    continue
+
+                # Dynamic allocation: use configured allocation or 10% of available balance, whichever is smaller
+                configured = settings.allocation_quote.get(symbol, 40.0)
+                max_from_balance = quote_bal * 0.10
+                allocation = min(configured, max_from_balance)
+                # Ensure minimum order value (~11 PLN / 5 USDT)
+                min_order = 11.0 if quote_asset == "PLN" else 5.0
+                if allocation < min_order:
+                    if quote_bal >= min_order:
+                        allocation = min_order
+                    else:
+                        logger.info("LIVE %s: za malo %s (%.2f) na %s", user.username, quote_asset, quote_bal, pair)
+                        results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": f"low balance {quote_bal:.2f} {quote_asset}"})
+                        continue
+
                 order = client.create_order(
                     symbol=pair,
                     side="BUY",
@@ -60,16 +88,21 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     quote_quantity=allocation,
                 )
             elif action == "SELL":
-                balances = client.get_balances()
                 held = 0.0
-                if isinstance(balances, list):
-                    for b in balances:
-                        if b.get("asset") == symbol:
-                            held = float(b.get("free", 0))
-                            break
+                for b in balances:
+                    if b.get("asset") == symbol:
+                        held = float(b.get("free", 0))
+                        break
                 if held <= 0:
                     logger.info("LIVE %s: brak %s do sprzedazy", user.username, symbol)
                     continue
+
+                # Find a pair to sell on
+                pair, quote_asset, _ = client.find_best_pair(symbol, balances)
+                if pair is None:
+                    # Fallback to configured pair
+                    pair = settings.binance_symbols.get(symbol, f"{symbol}{settings.exchange_quote_currency}")
+
                 order = client.create_order(
                     symbol=pair,
                     side="SELL",
@@ -86,8 +119,8 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 logger.info("LIVE %s: %s %s OK orderId=%s", user.username, action, pair, order.get("orderId"))
                 results.append({"user": user.username, "symbol": pair, "action": action, "status": "ok", "order_id": order.get("orderId")})
         except Exception as exc:
-            logger.exception("LIVE %s: wyjatek przy %s %s", user.username, action, pair)
-            results.append({"user": user.username, "symbol": pair, "action": action, "status": "exception", "detail": str(exc)})
+            logger.exception("LIVE %s: wyjatek przy %s %s", user.username, action, symbol)
+            results.append({"user": user.username, "symbol": symbol, "action": action, "status": "exception", "detail": str(exc)})
 
     return results
 

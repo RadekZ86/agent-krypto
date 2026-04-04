@@ -23,6 +23,8 @@ class BinanceClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = self.TESTNET_URL if testnet else self.BASE_URL
+        self._tradeable_pairs: dict[str, list[str]] | None = None
+        self._tradeable_ts: float = 0
     
     def _sign(self, params: dict) -> str:
         """Create HMAC SHA256 signature."""
@@ -234,7 +236,81 @@ class BinanceClient:
             perms.append("wypłaty")
         
         return True, f"Połączono. Uprawnienia: {', '.join(perms)}"
-    
+
+    def get_tradeable_pairs(self) -> dict[str, list[str]]:
+        """Return {base_asset: [quote_assets]} for pairs this account can trade.
+        Cached for 1 hour."""
+        if self._tradeable_pairs is not None and (time.time() - self._tradeable_ts) < 3600:
+            return self._tradeable_pairs
+
+        account = self.get_account()
+        if "error" in account:
+            return {}
+        user_perms = set(account.get("permissions", []))
+
+        info = self.get_exchange_info()
+        if "error" in info:
+            return {}
+
+        result: dict[str, list[str]] = {}
+        for sym in info.get("symbols", []):
+            if sym.get("status") != "TRADING":
+                continue
+            psets = sym.get("permissionSets", [])
+            match = False
+            for pset in psets:
+                if isinstance(pset, list) and user_perms & set(pset):
+                    match = True
+                    break
+            if not match:
+                continue
+            base = sym["baseAsset"]
+            quote = sym["quoteAsset"]
+            result.setdefault(base, []).append(quote)
+
+        self._tradeable_pairs = result
+        self._tradeable_ts = time.time()
+        return result
+
+    def find_best_pair(self, base_asset: str, balances: list[dict],
+                       preferred_quotes: list[str] | None = None) -> tuple[str | None, str | None, float]:
+        """Find the best trading pair for base_asset based on account's tradeable pairs
+        and available quote balances.
+        Returns (pair_symbol, quote_asset, available_quote_balance) or (None,None,0)."""
+        pairs = self.get_tradeable_pairs()
+        available_quotes = pairs.get(base_asset, [])
+        if not available_quotes:
+            return None, None, 0.0
+
+        # Build balance map
+        bal_map: dict[str, float] = {}
+        for b in balances:
+            asset = b.get("asset", "")
+            free = float(b.get("free", 0))
+            if free > 0:
+                bal_map[asset] = free
+
+        if preferred_quotes is None:
+            preferred_quotes = ["USDT", "PLN", "BUSD", "BTC", "BNB", "EUR"]
+
+        # Try preferred quotes first, then remaining by balance
+        best_pair = None
+        best_quote = None
+        best_bal = 0.0
+        for q in preferred_quotes:
+            if q in available_quotes and bal_map.get(q, 0) > 0:
+                return f"{base_asset}{q}", q, bal_map[q]
+
+        # Fallback: any quote with positive balance
+        for q in available_quotes:
+            bal = bal_map.get(q, 0)
+            if bal > best_bal:
+                best_pair = f"{base_asset}{q}"
+                best_quote = q
+                best_bal = bal
+
+        return best_pair, best_quote, best_bal
+
     def get_portfolio_value(self, quote_currency: str = "USDT") -> dict:
         """Calculate total portfolio value."""
         balances = self.get_balances()
