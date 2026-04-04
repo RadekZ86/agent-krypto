@@ -13,38 +13,34 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
       - name: Create deployment package
         run: |
           zip -r app.zip app/ -x "*.pyc" -x "*__pycache__*"
 
-      - name: Deploy via SCP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: s84.mydevil.net
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          source: "app.zip,requirements.txt"
-          target: "~/domains/agentkrypto.magicparty.usermd.net/public_python/"
-
-      - name: Install and restart
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: s84.mydevil.net
-          username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          script: |
-            cd ~/domains/agentkrypto.magicparty.usermd.net/public_python
-            
-            # Rozpakuj nowy kod
-            unzip -o app.zip
-            rm app.zip
-            
-            # Zainstaluj zależności
-            pip install --user -r requirements.txt --quiet
-            
-            # Zatrzymaj obecny uvicorn i uruchom nowy
-            pkill -f "uvicorn app.main:app.*12345" || true
-            sleep 2
-            nohup /home/MagicParty/.local/bin/uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
-            
-            echo "Deploy completed!"
+      - name: Deploy to server
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_HOST: s84.mydevil.net
+        run: |
+          # Dodaj klucz serwera do known_hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # Kopiuj pliki przez SCP z sshpass
+          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no app.zip requirements.txt ${SSH_USER}@${SSH_HOST}:~/domains/agentkrypto.magicparty.usermd.net/public_python/
+          
+          # Uruchom komendy przez SSH
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'ENDSSH'
+          cd ~/domains/agentkrypto.magicparty.usermd.net/public_python
+          unzip -o app.zip
+          rm app.zip
+          pip install --user -r requirements.txt --quiet
+          pkill -f "uvicorn app.main:app.*12345" || true
+          sleep 2
+          nohup /home/MagicParty/.local/bin/uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
+          echo "Deploy completed!"
+          ENDSSH
