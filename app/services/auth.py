@@ -154,21 +154,18 @@ class APIKeyService:
     
     def _encrypt(self, text: str) -> str:
         """Simple encryption for API secrets."""
-        key = self.ENCRYPTION_KEY
-        encrypted = []
-        for i, char in enumerate(text):
-            encrypted.append(chr(ord(char) ^ ord(key[i % len(key)])))
-        return ''.join(encrypted).encode('latin-1').hex()
+        key = self.ENCRYPTION_KEY.encode()
+        data = text.encode()
+        encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        return encrypted.hex()
     
     def _decrypt(self, encrypted_hex: str) -> str:
         """Decrypt API secret."""
         try:
-            encrypted = bytes.fromhex(encrypted_hex).decode('latin-1')
-            key = self.ENCRYPTION_KEY
-            decrypted = []
-            for i, char in enumerate(encrypted):
-                decrypted.append(chr(ord(char) ^ ord(key[i % len(key)])))
-            return ''.join(decrypted)
+            encrypted = bytes.fromhex(encrypted_hex)
+            key = self.ENCRYPTION_KEY.encode()
+            decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(encrypted))
+            return decrypted.decode()
         except Exception:
             return ""
     
