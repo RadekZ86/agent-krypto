@@ -28,7 +28,7 @@ class AIAdvisor:
             }
 
         client = OpenAI(api_key=settings.openai_api_key)
-        wallet = dashboard["wallet"]
+        paper_wallet = dashboard["wallet"]
         market_rows = dashboard["market"]
         decision_rows = dashboard["recent_decisions"][:5]
         learning = dashboard.get("learning", {})
@@ -38,8 +38,25 @@ class AIAdvisor:
         system_status = dashboard.get("system_status", {})
         private_learning = dashboard.get("private_learning")
         trade_ranking = dashboard.get("trade_ranking")
+        binance_wallet = dashboard.get("binance_wallet")
         selected_symbol = symbol if symbol in chart_packages else dashboard.get("chart_focus_symbol")
         selected_chart = chart_packages.get(selected_symbol) if selected_symbol else None
+
+        is_live = system_status.get("trading_mode") == "LIVE" and binance_wallet is not None
+
+        if is_live:
+            wallet_info = f"Portfel Binance (LIVE): {binance_wallet}"
+            mode_instruction = (
+                "Uzytkownik jest w trybie LIVE z prawdziwym kontem Binance. "
+                "Analizuj WYLACZNIE dane z portfela Binance powyzej. "
+                "NIE wspominaj o danych paper tradingu. "
+                "Podawaj realne wartosci z konta Binance."
+            )
+        else:
+            wallet_info = f"Portfel paper (symulacja): {paper_wallet}"
+            mode_instruction = (
+                "Tryb PAPER — nazywaj wynik portfela symulowanym wynikiem paper tradingu, a nie realnym zarobkiem."
+            )
 
         prompt = (
             "Napisz po polsku zwiezla analize panelu kryptowalutowego. "
@@ -47,8 +64,8 @@ class AIAdvisor:
             "Nie dawaj obietnic zysku ani porad inwestycyjnych. "
             "Zasada nadrzedna: zero klamstwa. Nie wolno niczego dopowiadac, zgadywac ani ukrywac niepewnosci. "
             "Jesli dane sa niepelne, stale lub niespojne, napisz to wprost. "
-            "Jesli trading_mode to PAPER, nazywaj wynik portfela symulowanym wynikiem paper tradingu, a nie realnym zarobkiem.\n\n"
-            f"Portfel: {wallet}\n"
+            f"{mode_instruction}\n\n"
+            f"{wallet_info}\n"
             f"Rynek: {market_rows}\n"
             f"Decyzje: {decision_rows}\n"
             f"Wnioski nauki: {learning.get('findings', [])}\n"
