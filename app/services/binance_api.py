@@ -296,22 +296,22 @@ class BinanceClient:
 class BinanceService:
     """Service to manage Binance connections for multiple users."""
     
-    def __init__(self, api_key_service):
-        self.api_key_service = api_key_service
-        self._clients: dict[int, BinanceClient] = {}
+    def __init__(self):
+        self._clients: dict[str, BinanceClient] = {}
     
-    def get_client(self, api_key: UserAPIKey) -> BinanceClient:
+    def get_client(self, api_key: str, api_secret: str, testnet: bool = False) -> BinanceClient:
         """Get or create Binance client for API key."""
-        if api_key.id not in self._clients:
-            secret = self.api_key_service.get_decrypted_secret(api_key)
-            self._clients[api_key.id] = BinanceClient(
-                api_key=api_key.api_key,
-                api_secret=secret,
-                testnet=api_key.is_testnet
+        cache_key = f"{api_key}_{testnet}"
+        if cache_key not in self._clients:
+            self._clients[cache_key] = BinanceClient(
+                api_key=api_key,
+                api_secret=api_secret,
+                testnet=testnet
             )
-        return self._clients[api_key.id]
+        return self._clients[cache_key]
     
-    def clear_client(self, api_key_id: int) -> None:
+    def clear_client(self, api_key: str, testnet: bool = False) -> None:
         """Remove cached client."""
-        if api_key_id in self._clients:
-            del self._clients[api_key_id]
+        cache_key = f"{api_key}_{testnet}"
+        if cache_key in self._clients:
+            del self._clients[cache_key]
