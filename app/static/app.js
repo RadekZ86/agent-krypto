@@ -1863,6 +1863,11 @@ function switchView(viewName) {
         btn.classList.toggle("active", btn.dataset.view === viewName);
     });
     
+    // Update mobile nav
+    document.querySelectorAll(".mobile-nav-item").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.view === viewName);
+    });
+    
     // Update views
     document.querySelectorAll(".app-view").forEach(view => {
         view.classList.toggle("active", view.dataset.view === viewName);
@@ -1892,7 +1897,15 @@ function syncPortfolioView() {
 }
 
 function initViewSwitching() {
+    // Desktop sidebar nav
     document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            switchView(btn.dataset.view);
+        });
+    });
+    
+    // Mobile bottom nav
+    document.querySelectorAll(".mobile-nav-item[data-view]").forEach(btn => {
         btn.addEventListener("click", () => {
             switchView(btn.dataset.view);
         });
