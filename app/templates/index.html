@@ -120,7 +120,6 @@
             <h1 id="view-title">Dashboard</h1>
             <span id="status-line" class="status-badge">Ladowanie...</span>
         </div>
-        <div class="header-center" id="mode-strip"></div>
         <div class="header-right">
             <button id="run-cycle-button" class="header-btn primary" title="Uruchom cykl">
                 <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -166,6 +165,9 @@
         <!-- ============ VIEW: DASHBOARD ============ -->
         <section class="app-view active" data-view="dashboard">
             <div class="view-content">
+                
+                <!-- Agent status bar (was in header, now in-page) -->
+                <div id="mode-strip" class="mode-strip-inline mode-strip"></div>
                 
                 <!-- Mobile hero balance card (visible only on mobile) -->
                 <div class="mobile-hero">

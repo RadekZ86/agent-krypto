@@ -200,14 +200,12 @@ body.app-mode {
     font-weight: 500;
 }
 
-.header-center {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    min-width: 0;
-    overflow-x: auto;
+.mode-strip-inline {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--border-radius);
+    margin-bottom: 16px;
+    overflow: hidden;
 }
 
 .header-right {
@@ -752,7 +750,7 @@ body.app-mode {
         display: none;
     }
     
-    .header-center {
+    .mode-strip-inline {
         display: none;
     }
     
