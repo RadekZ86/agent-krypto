@@ -1841,6 +1841,77 @@ function initPageMenu() {
     });
 }
 
+// ==================== APP VIEW SWITCHING ====================
+
+const viewTitles = {
+    dashboard: "Dashboard",
+    market: "Rynek",
+    charts: "Wykresy",
+    portfolio: "Portfel",
+    activity: "Aktywnosc",
+    ai: "AI Advisor",
+    settings: "Status"
+};
+
+let currentView = "dashboard";
+
+function switchView(viewName) {
+    if (viewName === currentView) return;
+    
+    // Update sidebar nav
+    document.querySelectorAll(".nav-item").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.view === viewName);
+    });
+    
+    // Update views
+    document.querySelectorAll(".app-view").forEach(view => {
+        view.classList.toggle("active", view.dataset.view === viewName);
+    });
+    
+    // Update title
+    const titleEl = document.getElementById("view-title");
+    if (titleEl) {
+        titleEl.textContent = viewTitles[viewName] || viewName;
+    }
+    
+    currentView = viewName;
+    
+    // Sync duplicate elements between views if needed
+    if (viewName === "portfolio") {
+        syncPortfolioView();
+    }
+}
+
+function syncPortfolioView() {
+    // Copy bought coins menu to portfolio view
+    const source = document.getElementById("bought-coins-menu");
+    const target = document.getElementById("bought-coins-menu-2");
+    if (source && target) {
+        target.innerHTML = source.innerHTML;
+    }
+}
+
+function initViewSwitching() {
+    document.querySelectorAll(".nav-item[data-view]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            switchView(btn.dataset.view);
+        });
+    });
+    
+    // Initialize collapsible headers
+    document.querySelectorAll(".card-header.collapsible").forEach(header => {
+        header.addEventListener("click", () => {
+            header.classList.toggle("collapsed");
+            const body = header.nextElementSibling;
+            if (body) {
+                body.style.display = header.classList.contains("collapsed") ? "none" : "";
+            }
+        });
+    });
+}
+
+// ==================== BUTTON EVENT HANDLERS ====================
+
 document.getElementById("refresh-button").addEventListener("click", async () => {
     try {
         await renderDashboard();
@@ -1881,7 +1952,20 @@ document.getElementById("reset-paper-button").addEventListener("click", async ()
     }
 });
 
+// AI refresh button in AI view
+const aiRefreshBtn = document.getElementById("ai-refresh-button");
+if (aiRefreshBtn) {
+    aiRefreshBtn.addEventListener("click", async () => {
+        try {
+            await loadAiInsight();
+        } catch (error) {
+            setStatus(error.message);
+        }
+    });
+}
+
 initPageMenu();
+initViewSwitching();
 renderDashboardWithRetry().catch((error) => setStatus(error.message));
 window.setInterval(() => {
     updateAgentPulseStrip();
