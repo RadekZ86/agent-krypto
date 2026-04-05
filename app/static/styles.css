@@ -1078,14 +1078,6 @@ body.app-mode {
         order: 2;
     }
 
-    .chart-stage {
-        min-height: 280px;
-    }
-
-    .chart-svg {
-        height: 260px;
-    }
-    
     /* ---- STACK LIST items ---- */
     .stack-item {
         padding: 14px 16px;
@@ -1845,11 +1837,11 @@ th {
 
 .chart-stage {
     position: relative;
-    min-height: 500px;
     border-radius: var(--border-radius);
     border: 1px solid var(--line);
     background: var(--bg-alt);
     padding: 8px;
+    overflow: visible;
 }
 
 .chart-svg {
@@ -2202,12 +2194,7 @@ th {
     }
 
     .chart-stage {
-        min-height: 400px;
         padding: 6px;
-    }
-
-    .chart-svg {
-        height: 380px;
     }
 
     .chart-toolbar {
@@ -2327,11 +2314,7 @@ th {
     }
 
     .chart-stage {
-        min-height: 280px;
-    }
-
-    .chart-svg {
-        height: 260px;
+        padding: 4px;
     }
 }
 
