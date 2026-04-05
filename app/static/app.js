@@ -1667,9 +1667,10 @@ function paintLwChart(container, summary, insights, dataSource, chartPackage, is
     const showMacd = selectedChartTab === "macd" && !isLifecycle;
 
     const chartHeight = window.innerWidth <= 768 ? 320 : 520;
+    const chartWidth = container.clientWidth || container.parentElement?.clientWidth || window.innerWidth - 40;
 
     lwChart = LightweightCharts.createChart(container, {
-        width: container.clientWidth,
+        width: chartWidth,
         height: chartHeight,
         layout: {
             background: { type: 'solid', color: '#131722' },
@@ -2413,8 +2414,21 @@ function switchView(viewName) {
         window._calendarLoaded = true;
         initCalendar();
     }
-    if (viewName === "charts" && selectedSymbol && typeof lwChart !== 'undefined' && lwChart) {
-        lwChart.timeScale().fitContent();
+    if (viewName === "charts") {
+        // On mobile, charts view was display:none during initial render,
+        // so the chart may have width 0 or not exist. Re-render it.
+        if (lwChart) {
+            const c = document.getElementById("lw-chart-container");
+            if (c && c.clientWidth > 0) {
+                lwChart.applyOptions({ width: c.clientWidth });
+                lwChart.timeScale().fitContent();
+            } else {
+                // Container still has no width — re-render after layout
+                requestAnimationFrame(() => renderSelectedChart().catch(() => {}));
+            }
+        } else if (selectedSymbol) {
+            renderSelectedChart().catch(() => {});
+        }
     }
 }
 
