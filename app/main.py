@@ -377,6 +377,220 @@ def chart_history(symbol: str, force_refresh: bool = False) -> JSONResponse:
     return JSONResponse(payload)
 
 
+@app.get("/api/calendar")
+def calendar_data(request: Request, year: int | None = None, month: int | None = None) -> JSONResponse:
+    """Return trade/order data grouped by day for the calendar view, with weekly/monthly/yearly summaries."""
+    from datetime import datetime, date, timedelta
+    from collections import defaultdict
+
+    now = datetime.utcnow()
+    y = year or now.year
+    m = month or now.month
+
+    # Build date range: full month + padding to complete weeks
+    first_day = date(y, m, 1)
+    if m == 12:
+        last_day = date(y + 1, 1, 1) - timedelta(days=1)
+    else:
+        last_day = date(y, m + 1, 1) - timedelta(days=1)
+
+    # Extend to full weeks (Mon=0..Sun=6)
+    start = first_day - timedelta(days=first_day.weekday())
+    end = last_day + timedelta(days=6 - last_day.weekday())
+
+    with SessionLocal() as session:
+        current_user = resolve_request_user(request)
+
+        # --- Live orders (LIVE mode) ---
+        live_rows = session.execute(
+            select(LiveOrderLog)
+            .where(
+                LiveOrderLog.created_at >= datetime.combine(start, datetime.min.time()),
+                LiveOrderLog.created_at <= datetime.combine(end, datetime.max.time()),
+            )
+            .order_by(LiveOrderLog.created_at)
+        ).scalars().all()
+
+        # --- Paper trades ---
+        paper_rows = session.execute(
+            select(SimulatedTrade)
+            .where(
+                SimulatedTrade.opened_at >= datetime.combine(start, datetime.min.time()),
+                SimulatedTrade.opened_at <= datetime.combine(end, datetime.max.time()),
+            )
+            .order_by(SimulatedTrade.opened_at)
+        ).scalars().all()
+
+        # Also get trades CLOSED in this period (may have been opened earlier)
+        paper_closed = session.execute(
+            select(SimulatedTrade)
+            .where(
+                SimulatedTrade.closed_at >= datetime.combine(start, datetime.min.time()),
+                SimulatedTrade.closed_at <= datetime.combine(end, datetime.max.time()),
+                SimulatedTrade.status == "CLOSED",
+            )
+            .order_by(SimulatedTrade.closed_at)
+        ).scalars().all()
+
+        # --- Build day map ---
+        days: dict[str, dict] = {}
+        d = start
+        while d <= end:
+            days[d.isoformat()] = {
+                "date": d.isoformat(),
+                "in_month": d.month == m,
+                "buys": [],
+                "sells": [],
+                "live_buys": [],
+                "live_sells": [],
+                "live_errors": 0,
+                "live_skips": 0,
+                "paper_profit": 0.0,
+                "live_volume": 0.0,
+            }
+            d += timedelta(days=1)
+
+        # Fill live orders
+        for row in live_rows:
+            day_key = row.created_at.date().isoformat()
+            if day_key not in days:
+                continue
+            entry = {
+                "time": row.created_at.strftime("%H:%M"),
+                "symbol": row.symbol,
+                "status": row.status,
+                "detail": row.detail,
+                "allocation": row.allocation,
+                "quote": row.quote_currency,
+            }
+            if row.action == "BUY":
+                if row.status == "ok":
+                    days[day_key]["live_buys"].append(entry)
+                    days[day_key]["live_volume"] += (row.allocation or 0)
+                elif row.status == "error":
+                    days[day_key]["live_errors"] += 1
+                elif row.status == "skip":
+                    days[day_key]["live_skips"] += 1
+            elif row.action == "SELL":
+                if row.status == "ok":
+                    days[day_key]["live_sells"].append(entry)
+                    days[day_key]["live_volume"] += (row.allocation or 0)
+                elif row.status == "error":
+                    days[day_key]["live_errors"] += 1
+
+        # Fill paper trade opens
+        seen_ids = set()
+        for row in paper_rows:
+            day_key = row.opened_at.date().isoformat()
+            if day_key not in days:
+                continue
+            seen_ids.add(row.id)
+            entry = {
+                "time": row.opened_at.strftime("%H:%M"),
+                "symbol": row.symbol,
+                "qty": round(row.quantity, 6),
+                "price": round(row.buy_price, 2),
+                "value": round(row.buy_value, 2),
+            }
+            days[day_key]["buys"].append(entry)
+
+        # Fill paper trade closes
+        for row in paper_closed:
+            if row.id in seen_ids and row.closed_at:
+                pass  # already counted as BUY
+            day_key = row.closed_at.date().isoformat() if row.closed_at else None
+            if not day_key or day_key not in days:
+                continue
+            entry = {
+                "time": row.closed_at.strftime("%H:%M"),
+                "symbol": row.symbol,
+                "qty": round(row.quantity, 6),
+                "sell_price": round(row.sell_price, 2) if row.sell_price else 0,
+                "profit": round(row.profit, 2) if row.profit else 0,
+            }
+            days[day_key]["sells"].append(entry)
+            days[day_key]["paper_profit"] += (row.profit or 0)
+
+        # --- Build summaries ---
+        day_list = sorted(days.values(), key=lambda x: x["date"])
+
+        # Weekly summaries
+        weeks = defaultdict(lambda: {"buys": 0, "sells": 0, "live_buys": 0, "live_sells": 0, "paper_profit": 0.0, "live_volume": 0.0, "errors": 0, "skips": 0})
+        for dd in day_list:
+            dt = date.fromisoformat(dd["date"])
+            week_start = (dt - timedelta(days=dt.weekday())).isoformat()
+            w = weeks[week_start]
+            w["buys"] += len(dd["buys"])
+            w["sells"] += len(dd["sells"])
+            w["live_buys"] += len(dd["live_buys"])
+            w["live_sells"] += len(dd["live_sells"])
+            w["paper_profit"] += dd["paper_profit"]
+            w["live_volume"] += dd["live_volume"]
+            w["errors"] += dd["live_errors"]
+            w["skips"] += dd["live_skips"]
+
+        # Monthly summary (only current month)
+        month_summary = {"buys": 0, "sells": 0, "live_buys": 0, "live_sells": 0, "paper_profit": 0.0, "live_volume": 0.0, "errors": 0, "skips": 0, "active_days": 0}
+        for dd in day_list:
+            if not dd["in_month"]:
+                continue
+            has_activity = len(dd["buys"]) + len(dd["sells"]) + len(dd["live_buys"]) + len(dd["live_sells"]) > 0
+            month_summary["buys"] += len(dd["buys"])
+            month_summary["sells"] += len(dd["sells"])
+            month_summary["live_buys"] += len(dd["live_buys"])
+            month_summary["live_sells"] += len(dd["live_sells"])
+            month_summary["paper_profit"] += dd["paper_profit"]
+            month_summary["live_volume"] += dd["live_volume"]
+            month_summary["errors"] += dd["live_errors"]
+            month_summary["skips"] += dd["live_skips"]
+            if has_activity:
+                month_summary["active_days"] += 1
+        month_summary["paper_profit"] = round(month_summary["paper_profit"], 2)
+        month_summary["live_volume"] = round(month_summary["live_volume"], 4)
+
+        # Year summary
+        year_live = session.execute(
+            select(
+                func.count(LiveOrderLog.id),
+                func.coalesce(func.sum(LiveOrderLog.allocation), 0.0),
+            ).where(
+                LiveOrderLog.created_at >= datetime(y, 1, 1),
+                LiveOrderLog.created_at < datetime(y + 1, 1, 1),
+                LiveOrderLog.status == "ok",
+            )
+        ).one()
+        year_paper = session.execute(
+            select(
+                func.count(SimulatedTrade.id),
+                func.coalesce(func.sum(SimulatedTrade.profit), 0.0),
+            ).where(
+                SimulatedTrade.closed_at >= datetime(y, 1, 1),
+                SimulatedTrade.closed_at < datetime(y + 1, 1, 1),
+                SimulatedTrade.status == "CLOSED",
+            )
+        ).one()
+        year_summary = {
+            "live_trades": int(year_live[0] or 0),
+            "live_volume": round(float(year_live[1] or 0), 2),
+            "paper_closed": int(year_paper[0] or 0),
+            "paper_profit": round(float(year_paper[1] or 0), 2),
+        }
+
+        # Simplify day entries for JSON
+        for dd in day_list:
+            dd["paper_profit"] = round(dd["paper_profit"], 2)
+            dd["live_volume"] = round(dd["live_volume"], 4)
+
+    return JSONResponse({
+        "year": y,
+        "month": m,
+        "days": day_list,
+        "weeks": {k: dict(v) for k, v in weeks.items()},
+        "month_summary": month_summary,
+        "year_summary": year_summary,
+    }, headers=no_cache_headers())
+
+
 def _build_dashboard_payload(
     session,
     include_chart_package: bool = False,

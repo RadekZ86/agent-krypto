@@ -2758,6 +2758,7 @@ const viewTitles = {
     portfolio: "Portfel",
     activity: "Aktywnosc",
     ai: "AI Advisor",
+    calendar: "Kalendarz",
     settings: "Status",
     help: "Pomoc"
 };
@@ -2793,6 +2794,10 @@ function switchView(viewName) {
     // Sync duplicate elements between views if needed
     if (viewName === "portfolio") {
         syncPortfolioView();
+    }
+    if (viewName === "calendar" && !window._calendarLoaded) {
+        window._calendarLoaded = true;
+        initCalendar();
     }
 }
 
@@ -2942,6 +2947,192 @@ if (aiRefreshBtn) {
             setStatus(error.message);
         }
     });
+}
+
+// ==================== CALENDAR ====================
+let _calYear, _calMonth, _calData = null;
+
+const PL_MONTHS = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec",
+    "Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
+const PL_DAYS_SHORT = ["Pon","Wt","Śr","Czw","Pt","Sob","Nd"];
+
+function initCalendar() {
+    const now = new Date();
+    _calYear = now.getFullYear();
+    _calMonth = now.getMonth() + 1;
+    document.getElementById("cal-prev").addEventListener("click", () => {
+        _calMonth--;
+        if (_calMonth < 1) { _calMonth = 12; _calYear--; }
+        loadCalendar();
+    });
+    document.getElementById("cal-next").addEventListener("click", () => {
+        _calMonth++;
+        if (_calMonth > 12) { _calMonth = 1; _calYear++; }
+        loadCalendar();
+    });
+    document.getElementById("cal-today").addEventListener("click", () => {
+        const n = new Date();
+        _calYear = n.getFullYear();
+        _calMonth = n.getMonth() + 1;
+        loadCalendar();
+    });
+    loadCalendar();
+}
+
+async function loadCalendar() {
+    const titleEl = document.getElementById("cal-month-title");
+    titleEl.textContent = PL_MONTHS[_calMonth - 1] + " " + _calYear;
+    try {
+        const res = await fetch(`/api/calendar?year=${_calYear}&month=${_calMonth}`);
+        if (!res.ok) throw new Error("Błąd API");
+        _calData = await res.json();
+        renderCalendarGrid(_calData);
+        renderCalMonthSummary(_calData.month_summary);
+        renderCalYearSummary(_calData.year_summary);
+        // Clear day/week until user clicks
+        document.getElementById("cal-day-summary").innerHTML = '<p class="empty-state">Kliknij dzień w kalendarzu</p>';
+        document.getElementById("cal-week-summary").innerHTML = '<p class="empty-state">—</p>';
+    } catch (e) {
+        console.error("Calendar load error:", e);
+    }
+}
+
+function renderCalendarGrid(data) {
+    const container = document.getElementById("cal-days");
+    container.innerHTML = "";
+    const today = new Date();
+    const todayStr = today.getFullYear() + "-" + String(today.getMonth()+1).padStart(2,"0") + "-" + String(today.getDate()).padStart(2,"0");
+
+    // API returns full grid with padding days (in_month=false)
+    (data.days || []).forEach(dd => {
+        const cell = document.createElement("div");
+        const dayNum = parseInt(dd.date.split("-")[2], 10);
+        cell.className = "cal-day";
+        if (!dd.in_month) cell.classList.add("other-month");
+        if (dd.date === todayStr) cell.classList.add("today");
+
+        const hasData = (dd.buys && dd.buys.length) || (dd.sells && dd.sells.length) ||
+                        (dd.live_buys && dd.live_buys.length) || (dd.live_sells && dd.live_sells.length);
+        if (hasData) cell.classList.add("has-data");
+
+        let content = `<span class="cal-day-num">${dayNum}</span>`;
+
+        if (dd.buys && dd.buys.length) {
+            dd.buys.slice(0, 2).forEach(b => {
+                content += `<div class="cal-entry cal-buy">▲ ${b.symbol}</div>`;
+            });
+            if (dd.buys.length > 2) content += `<div class="cal-entry cal-buy-more">+${dd.buys.length - 2} kupno</div>`;
+        }
+        if (dd.sells && dd.sells.length) {
+            dd.sells.slice(0, 2).forEach(s => {
+                content += `<div class="cal-entry cal-sell">▼ ${s.symbol}</div>`;
+            });
+            if (dd.sells.length > 2) content += `<div class="cal-entry cal-sell-more">+${dd.sells.length - 2} sprzedaż</div>`;
+        }
+        if (dd.live_buys && dd.live_buys.length) {
+            dd.live_buys.slice(0, 2).forEach(b => {
+                content += `<div class="cal-entry cal-live-buy">⚡ ${b.symbol}</div>`;
+            });
+            if (dd.live_buys.length > 2) content += `<div class="cal-entry cal-buy-more">+${dd.live_buys.length - 2} live</div>`;
+        }
+        if (dd.live_sells && dd.live_sells.length) {
+            dd.live_sells.slice(0, 2).forEach(s => {
+                content += `<div class="cal-entry cal-live-sell">⚡ ${s.symbol}</div>`;
+            });
+            if (dd.live_sells.length > 2) content += `<div class="cal-entry cal-sell-more">+${dd.live_sells.length - 2} live</div>`;
+        }
+
+        cell.innerHTML = content;
+        if (dd.in_month) {
+            cell.addEventListener("click", () => onCalDayClick(dd));
+        }
+        container.appendChild(cell);
+    });
+}
+
+function onCalDayClick(dd) {
+    // Highlight selected day
+    document.querySelectorAll("#cal-days .cal-day").forEach(c => c.classList.remove("selected"));
+    const allDays = document.querySelectorAll("#cal-days .cal-day:not(.other-month)");
+    const dayNum = parseInt(dd.date.split("-")[2], 10);
+    allDays.forEach(c => {
+        const num = parseInt(c.querySelector(".cal-day-num")?.textContent);
+        if (num === dayNum) c.classList.add("selected");
+    });
+
+    const daySumEl = document.getElementById("cal-day-summary");
+    const hasAny = dd.buys.length + dd.sells.length + dd.live_buys.length + dd.live_sells.length;
+    if (!hasAny) {
+        daySumEl.innerHTML = '<p class="empty-state">Brak aktywności w tym dniu</p>';
+    } else {
+        let h = '<div class="cal-summary-detail">';
+        if (dd.buys.length) {
+            const list = dd.buys.map(b => `${b.symbol} (${b.value} USD)`).join(", ");
+            h += `<div class="cal-stat"><span class="cal-label">Kupno (paper):</span> <span class="cal-value positive">${list}</span></div>`;
+        }
+        if (dd.sells.length) {
+            const list = dd.sells.map(s => `${s.symbol} (${s.profit >= 0 ? '+' : ''}${s.profit} USD)`).join(", ");
+            h += `<div class="cal-stat"><span class="cal-label">Sprzedaż (paper):</span> <span class="cal-value negative">${list}</span></div>`;
+        }
+        if (dd.live_buys.length) {
+            const list = dd.live_buys.map(b => `${b.symbol} ${b.time}`).join(", ");
+            h += `<div class="cal-stat"><span class="cal-label">Kupno (LIVE):</span> <span class="cal-value positive">${list}</span></div>`;
+        }
+        if (dd.live_sells.length) {
+            const list = dd.live_sells.map(s => `${s.symbol} ${s.time}`).join(", ");
+            h += `<div class="cal-stat"><span class="cal-label">Sprzedaż (LIVE):</span> <span class="cal-value negative">${list}</span></div>`;
+        }
+        if (dd.live_errors) h += `<div class="cal-stat"><span class="cal-label">Błędy LIVE:</span> <span class="cal-value">${dd.live_errors}</span></div>`;
+        if (dd.paper_profit !== 0) h += `<div class="cal-stat"><span class="cal-label">Paper profit:</span> <span class="cal-value ${dd.paper_profit >= 0 ? 'positive' : 'negative'}">${dd.paper_profit >= 0 ? '+' : ''}${dd.paper_profit.toFixed(2)} USD</span></div>`;
+        if (dd.live_volume > 0) h += `<div class="cal-stat"><span class="cal-label">Wolumen LIVE:</span> <span class="cal-value">${dd.live_volume.toFixed(2)}</span></div>`;
+        h += '</div>';
+        daySumEl.innerHTML = h;
+    }
+
+    // Find week for this day
+    const dt = new Date(dd.date);
+    const weekStart = new Date(dt);
+    weekStart.setDate(dt.getDate() - ((dt.getDay() + 6) % 7)); // Monday
+    const weekKey = weekStart.toISOString().split("T")[0];
+    renderCalWeekSummary(_calData.weeks ? _calData.weeks[weekKey] : null, weekKey);
+}
+
+function renderCalWeekSummary(week, label) {
+    const el = document.getElementById("cal-week-summary");
+    if (!week) { el.innerHTML = '<p class="empty-state">Brak danych dla tego tygodnia</p>'; return; }
+    el.innerHTML = `<div class="cal-summary-detail">
+        <h4>${label}</h4>
+        <div class="cal-stat"><span class="cal-label">Kupno:</span> <span class="cal-value">${week.buys}</span></div>
+        <div class="cal-stat"><span class="cal-label">Sprzedaż:</span> <span class="cal-value">${week.sells}</span></div>
+        <div class="cal-stat"><span class="cal-label">Paper profit:</span> <span class="cal-value ${week.profit >= 0 ? 'positive' : 'negative'}">${week.profit >= 0 ? '+' : ''}${week.profit.toFixed(2)} USD</span></div>
+        <div class="cal-stat"><span class="cal-label">Wolumen LIVE:</span> <span class="cal-value">${week.volume.toFixed(2)}</span></div>
+        <div class="cal-stat"><span class="cal-label">Błędy:</span> <span class="cal-value">${week.errors}</span></div>
+    </div>`;
+}
+
+function renderCalMonthSummary(ms) {
+    const el = document.getElementById("cal-month-summary");
+    if (!ms) { el.innerHTML = '<p class="empty-state">—</p>'; return; }
+    el.innerHTML = `<div class="cal-summary-detail">
+        <div class="cal-stat"><span class="cal-label">Aktywne dni:</span> <span class="cal-value">${ms.active_days}</span></div>
+        <div class="cal-stat"><span class="cal-label">Kupno:</span> <span class="cal-value">${ms.buys}</span></div>
+        <div class="cal-stat"><span class="cal-label">Sprzedaż:</span> <span class="cal-value">${ms.sells}</span></div>
+        <div class="cal-stat"><span class="cal-label">Paper profit:</span> <span class="cal-value ${ms.profit >= 0 ? 'positive' : 'negative'}">${ms.profit >= 0 ? '+' : ''}${ms.profit.toFixed(2)} USD</span></div>
+        <div class="cal-stat"><span class="cal-label">Wolumen LIVE:</span> <span class="cal-value">${ms.volume.toFixed(2)}</span></div>
+        <div class="cal-stat"><span class="cal-label">Błędy:</span> <span class="cal-value">${ms.errors}</span></div>
+    </div>`;
+}
+
+function renderCalYearSummary(ys) {
+    const el = document.getElementById("cal-year-summary");
+    if (!ys) { el.innerHTML = '<p class="empty-state">—</p>'; return; }
+    el.innerHTML = `<div class="cal-summary-detail">
+        <div class="cal-stat"><span class="cal-label">Rok:</span> <span class="cal-value">${_calYear}</span></div>
+        <div class="cal-stat"><span class="cal-label">Transakcje LIVE:</span> <span class="cal-value">${ys.live_trades}</span></div>
+        <div class="cal-stat"><span class="cal-label">Wolumen LIVE:</span> <span class="cal-value">${ys.live_volume.toFixed(2)}</span></div>
+        <div class="cal-stat"><span class="cal-label">Paper zamknięte:</span> <span class="cal-value">${ys.paper_closed}</span></div>
+        <div class="cal-stat"><span class="cal-label">Paper profit:</span> <span class="cal-value ${ys.paper_profit >= 0 ? 'positive' : 'negative'}">${ys.paper_profit >= 0 ? '+' : ''}${ys.paper_profit.toFixed(2)} USD</span></div>
+    </div>`;
 }
 
 initPageMenu();
