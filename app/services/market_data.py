@@ -119,7 +119,7 @@ class MarketDataService:
         try:
             records = self._fetch_live_series(symbol)
         except (requests.RequestException, ValueError):
-            records = self._generate_demo_series(symbol)
+            records = self._generate_demo_series(session, symbol)
 
         self._persist_records(session, symbol, records)
         latest = records[-1]
@@ -280,19 +280,35 @@ class MarketDataService:
 
         return records
 
-    def _generate_demo_series(self, symbol: str) -> list[dict[str, float | datetime | str]]:
+    def _generate_demo_series(self, session: Session, symbol: str) -> list[dict[str, float | datetime | str]]:
         seed = sum(ord(char) for char in symbol)
         generator = np.random.default_rng(seed)
+        # Realistic fallback prices (USD) for all tracked coins.
+        # Used ONLY when no real market data exists yet for a symbol.
         base_prices = {
-            "BTC": 84000.0,
-            "ETH": 1900.0,
-            "BNB": 590.0,
-            "SOL": 165.0,
-            "XRP": 0.60,
-            "ADA": 0.72,
-            "DOGE": 0.19,
+            "BTC": 84000.0, "ETH": 1900.0, "BNB": 590.0, "SOL": 165.0,
+            "XRP": 0.60, "ADA": 0.35, "DOGE": 0.17, "TRX": 0.24,
+            "AVAX": 22.0, "DOT": 4.3, "LINK": 14.0, "TON": 3.5,
+            "SUI": 2.2, "LTC": 84.0, "BCH": 340.0, "ATOM": 4.8,
+            "UNI": 6.0, "NEAR": 2.6, "APT": 5.3, "ETC": 16.0,
+            "XLM": 0.27, "HBAR": 0.17, "FIL": 2.8, "ARB": 0.35,
+            "AAVE": 180.0, "OP": 0.70, "INJ": 9.0, "ICP": 7.5,
+            "VET": 0.025, "ALGO": 0.20, "SHIB": 0.000012, "PEPE": 0.0000070,
+            "SEI": 0.20, "MKR": 1500.0, "EOS": 0.75, "CRO": 0.085,
+            "KAS": 0.035, "MNT": 0.72, "PYTH": 0.15, "RUNE": 1.3,
         }
-        base_price = base_prices.get(symbol, 100.0)
+        base_price = base_prices.get(symbol, 1.0)
+
+        # If we already have real (non-demo) market data for this symbol,
+        # use its last close price as the base to avoid wild price jumps.
+        last_real = session.execute(
+            select(MarketData.close)
+            .where(MarketData.symbol == symbol, MarketData.source != "demo")
+            .order_by(MarketData.timestamp.desc())
+            .limit(1)
+        ).scalar()
+        if last_real is not None and last_real > 0:
+            base_price = float(last_real)
         step = self._interval_delta()
         timestamp = datetime.utcnow() - step * settings.history_bars
         records: list[dict[str, float | datetime | str]] = []
