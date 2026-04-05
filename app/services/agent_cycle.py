@@ -15,6 +15,22 @@ from app.services.wallet import WalletService
 
 logger = logging.getLogger(__name__)
 
+# Throttle repeated skip-log entries so we don't spam the DB / dashboard
+import time as _time
+_skip_log_cache: dict[tuple, float] = {}  # (username, action, reason_key) -> epoch
+_SKIP_LOG_INTERVAL = 1800.0  # seconds (30 min)
+
+
+def _should_log_skip(username: str, action: str, reason_key: str) -> bool:
+    """Return True if this skip should be logged (throttled to once per 30 min per key)."""
+    key = (username, action, reason_key)
+    now = _time.time()
+    last = _skip_log_cache.get(key, 0.0)
+    if now - last >= _SKIP_LOG_INTERVAL:
+        _skip_log_cache[key] = now
+        return True
+    return False
+
 
 def _mirror_to_live_users(session: Session, symbol: str, action: str, market_price: float) -> list[dict]:
     """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key.
@@ -58,6 +74,21 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 continue
 
             if action == "BUY":
+                # Pre-check: does user have ANY quote currency above min order?
+                bal_map = {b["asset"]: float(b.get("free", 0)) for b in balances if float(b.get("free", 0)) > 0}
+                has_usable_funds = any(
+                    bal_map.get(q, 0) >= _MIN_ORDER.get(q, 5.0)
+                    for q in _BRIDGE_QUOTES
+                )
+                if not has_usable_funds:
+                    if _should_log_skip(user.username, "BUY", "no_funds"):
+                        held_summary = ", ".join(f"{k}={v:.4f}" for k, v in sorted(bal_map.items()) if v > 0.001)
+                        logger.info("LIVE %s: brak wystarczajacych srodkow do zakupu (pomin. %s) [%s]", user.username, symbol, held_summary)
+                        session.add(LiveOrderLog(
+                            username=user.username, symbol=symbol, action="BUY", status="skip",
+                            detail=f"brak srodkow - ponizej min. zleceń ({held_summary[:200]})",
+                        ))
+                    continue
                 order_result = _execute_live_buy(client, session, user, symbol, balances)
                 if order_result is not None:
                     results.append(order_result)
@@ -68,7 +99,8 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                         held = float(b.get("free", 0))
                         break
                 if held <= 0:
-                    logger.info("LIVE %s: brak %s do sprzedazy", user.username, symbol)
+                    if _should_log_skip(user.username, "SELL", f"no_hold_{symbol}"):
+                        logger.info("LIVE %s: brak %s do sprzedazy", user.username, symbol)
                     continue
 
                 # Find a pair to sell on
@@ -80,8 +112,9 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 # Adjust quantity to LOT_SIZE stepSize to avoid Filter failure
                 sell_qty = _floor_to_step_size(client, pair, held)
                 if sell_qty <= 0:
-                    logger.info("LIVE %s: %s ilosc %.8f ponizej minQty dla %s", user.username, symbol, held, pair)
-                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip", detail=f"qty {held:.8f} < minQty"))
+                    if _should_log_skip(user.username, "SELL", f"dust_{symbol}"):
+                        logger.info("LIVE %s: %s ilosc %.8f ponizej minQty dla %s (dust)", user.username, symbol, held, pair)
+                        session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip", detail=f"qty {held:.8f} < minQty (dust)"))
                     continue
 
                 order = client.create_order(
