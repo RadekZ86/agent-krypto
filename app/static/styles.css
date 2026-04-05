@@ -1033,6 +1033,47 @@ body.app-mode {
         border-radius: 10px;
         font-weight: 600;
     }
+
+    /* ---- CHART SYMBOL PICKER: compact grid on mobile ---- */
+    .chart-symbol-switcher {
+        max-height: 140px;
+        overflow-y: auto;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        margin-bottom: 8px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .chart-symbol-switcher .switcher-button {
+        padding: 6px 10px;
+        font-size: 0.7rem;
+        min-height: 32px;
+        border-radius: 6px;
+        font-weight: 600;
+    }
+
+    /* Chart filter/range switchers also compact */
+    .switcher-tight .switcher-button {
+        padding: 6px 10px;
+        font-size: 0.7rem;
+        min-height: 32px;
+        border-radius: 6px;
+    }
+
+    /* Chart takes priority - learning card collapsed */
+    .charts-layout .learning-card {
+        order: 2;
+    }
+
+    .chart-stage {
+        min-height: 280px;
+    }
+
+    .chart-svg {
+        height: 260px;
+    }
     
     /* ---- STACK LIST items ---- */
     .stack-item {
@@ -1049,15 +1090,6 @@ body.app-mode {
     
     .market-table {
         min-width: 800px;
-    }
-    
-    /* ---- CHART ---- */
-    .chart-stage {
-        min-height: 350px;
-    }
-    
-    .chart-svg {
-        height: 330px;
     }
     
     /* ---- WATCHLIST rows more spacious ---- */
