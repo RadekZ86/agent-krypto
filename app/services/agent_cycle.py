@@ -107,19 +107,22 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
     return results
 
 
-# Bridge currencies to try when direct pair is not available or has no balance.
-# Order: try direct PLN first, then USDC (most altcoin pairs on Binance PL), then EUR, BTC, BNB.
-_BRIDGE_QUOTES = ["PLN", "USDC", "EUR", "BTC", "BNB"]
+# All quote currencies we can trade through, ordered by preference.
+_BRIDGE_QUOTES = ["PLN", "USDC", "USDT", "EUR", "BTC", "ETH", "BNB"]
 
-# Min order values per quote currency (Binance minNotional)
-_MIN_ORDER = {"PLN": 25.0, "USDC": 5.0, "EUR": 5.0, "BTC": 0.0001, "BNB": 0.01}
+# Min order values per quote currency (Binance minNotional / practical min)
+_MIN_ORDER = {
+    "PLN": 25.0, "USDC": 5.0, "USDT": 5.0, "EUR": 5.0, "BTC": 0.0001,
+    "ETH": 0.003, "BNB": 0.05, "BRL": 10.0, "JPY": 500.0, "MXN": 100.0,
+}
 
 # Cache for symbol LOT_SIZE info
 _lot_size_cache: dict[str, tuple[float, float]] = {}
 
 
 def _floor_to_step_size(client, pair: str, qty: float) -> float:
-    """Floor quantity to the pair's LOT_SIZE stepSize and check minQty."""
+    """Floor quantity to the pair's LOT_SIZE stepSize and check minQty.
+    Returns a properly rounded float matching Binance precision."""
     import math
     if pair not in _lot_size_cache:
         info = client.get_exchange_info(symbol=pair)
@@ -139,7 +142,10 @@ def _floor_to_step_size(client, pair: str, qty: float) -> float:
     if qty < min_qty:
         return 0.0
     if step_size > 0:
+        # Calculate precision from step_size (e.g. 1.0 → 0 decimals, 0.01 → 2)
+        precision = max(0, -int(math.floor(math.log10(step_size)))) if step_size < 1 else 0
         floored = math.floor(qty / step_size) * step_size
+        floored = round(floored, precision)  # Remove floating-point noise
         return floored if floored >= min_qty else 0.0
     return qty
 
@@ -159,23 +165,13 @@ def _get_allocation(user, quote_bal: float) -> float:
 
 
 def _execute_live_buy(client, session: Session, user, symbol: str, balances: list[dict]) -> dict | None:
-    """Execute a LIVE BUY for a symbol, including bridge-buy logic.
+    """Execute a LIVE BUY for a symbol.
+    Strategy:
+      1. Direct buy — find any quote the user has balance in (preferred order).
+      2. Bridge buy — convert any held currency → needed quote → ALT.
     Returns result dict or None if nothing to report."""
     from app.models import LiveOrderLog
 
-    # 1. Try direct buy (find_best_pair already checks balance)
-    pair, quote_asset, quote_bal = client.find_best_pair(symbol, balances)
-
-    if pair is not None and quote_bal > 0:
-        allocation = _get_allocation(user, quote_bal)
-        min_order = _MIN_ORDER.get(quote_asset, 5.0)
-        if allocation >= min_order:
-            return _place_buy_order(client, session, user, pair, quote_asset, allocation)
-        elif quote_bal >= min_order:
-            return _place_buy_order(client, session, user, pair, quote_asset, min_order)
-        # else: balance too low for this pair, try bridge below
-
-    # 2. Try bridge-buy: convert user's available currency → bridge quote → ALT
     tradeable_pairs = client.get_tradeable_pairs()
     alt_quotes = tradeable_pairs.get(symbol, [])
     if not alt_quotes:
@@ -190,93 +186,106 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
         if free > 0:
             bal_map[b["asset"]] = free
 
-    # Try each bridge: find a currency user HAS that can be converted to a quote the ALT accepts
-    for bridge_quote in _BRIDGE_QUOTES:
-        if bridge_quote not in alt_quotes:
+    # ---------- 1. DIRECT BUY: user already has a quote currency ----------
+    # Try preferred quotes first, then any available
+    tried_quotes = set()
+    for q in list(_BRIDGE_QUOTES) + [x for x in alt_quotes if x not in _BRIDGE_QUOTES]:
+        if q in tried_quotes or q not in alt_quotes:
+            continue
+        tried_quotes.add(q)
+        qbal = bal_map.get(q, 0.0)
+        min_order = _MIN_ORDER.get(q, 5.0)
+        if qbal < min_order:
+            continue
+        alt_pair = f"{symbol}{q}"
+        allocation = _get_allocation(user, qbal)
+        if allocation < min_order:
+            allocation = min_order
+        if allocation > qbal:
+            allocation = qbal
+        return _place_buy_order(client, session, user, alt_pair, q, allocation)
+
+    # ---------- 2. BRIDGE BUY: convert held currency → needed quote → ALT ----------
+    # For every quote the ALT accepts, check if we can buy that quote with something we hold
+    for target_quote in _BRIDGE_QUOTES:
+        if target_quote not in alt_quotes:
             continue  # ALT doesn't trade against this quote
 
-        bridge_bal = bal_map.get(bridge_quote, 0.0)
-        min_order = _MIN_ORDER.get(bridge_quote, 5.0)
+        # What can we buy target_quote WITH?
+        target_buy_quotes = tradeable_pairs.get(target_quote, [])  # e.g. USDC can be bought with PLN, BRL, MXN
 
-        if bridge_bal >= min_order:
-            # User already has this bridge currency with enough balance
-            alt_pair = f"{symbol}{bridge_quote}"
-            allocation = _get_allocation(user, bridge_bal)
-            if allocation < min_order:
-                allocation = min_order
-            if allocation > bridge_bal:
-                allocation = bridge_bal
-            return _place_buy_order(client, session, user, alt_pair, bridge_quote, allocation)
+        # Try each source currency the user holds
+        for source_currency in _BRIDGE_QUOTES:
+            if source_currency == target_quote:
+                continue
+            if source_currency not in target_buy_quotes:
+                continue  # Can't buy target_quote with source_currency
+            source_bal = bal_map.get(source_currency, 0.0)
+            source_min = _MIN_ORDER.get(source_currency, 5.0)
+            if source_bal < source_min:
+                continue
 
-        # Check if we can convert PLN → bridge_quote (e.g. PLN → USDC)
-        if bridge_quote == "PLN":
-            continue  # PLN is source, not target
-        pln_bal = bal_map.get("PLN", 0.0)
-        if pln_bal < 25.0:
-            continue  # Not enough PLN
-        # Check if bridge_quote can be bought with PLN (e.g. USDCPLN exists)
-        bridge_pln_quotes = tradeable_pairs.get(bridge_quote, [])
-        if "PLN" not in bridge_pln_quotes:
-            continue
+            # === BRIDGE: source_currency → target_quote → ALT ===
+            src_allocation = _get_allocation(user, source_bal)
+            if src_allocation < source_min:
+                src_allocation = source_min
+            if src_allocation > source_bal:
+                src_allocation = source_bal
 
-        # === BRIDGE BUY: PLN → bridge_quote → ALT ===
-        pln_allocation = _get_allocation(user, pln_bal)
-        if pln_allocation < 25.0:
-            pln_allocation = min(25.0, pln_bal)
-        if pln_allocation < 25.0:
-            continue
+            convert_pair = f"{target_quote}{source_currency}"
+            logger.info("LIVE %s: bridge %s via %s->%s->%s (%.4f %s)",
+                        user.username, symbol, source_currency, target_quote, symbol,
+                        src_allocation, source_currency)
 
-        logger.info("LIVE %s: bridge buy %s via PLN->%s (%.2f PLN)", user.username, symbol, bridge_quote, pln_allocation)
+            step1 = client.create_order(
+                symbol=convert_pair,
+                side="BUY",
+                order_type="MARKET",
+                quote_quantity=src_allocation,
+            )
+            if "error" in step1:
+                logger.warning("LIVE %s: bridge step1 %s error: %s", user.username, convert_pair, step1["error"])
+                session.add(LiveOrderLog(
+                    username=user.username, symbol=convert_pair, action="BUY", status="error",
+                    detail=f"bridge step1: {str(step1['error'])[:400]}", allocation=src_allocation, quote_currency=source_currency,
+                ))
+                continue  # Try next source
 
-        # Step 1: Buy bridge quote with PLN
-        convert_pair = f"{bridge_quote}PLN"
-        step1 = client.create_order(
-            symbol=convert_pair,
-            side="BUY",
-            order_type="MARKET",
-            quote_quantity=pln_allocation,
-        )
-        if "error" in step1:
-            logger.warning("LIVE %s: bridge step1 %s error: %s", user.username, convert_pair, step1["error"])
+            # Calculate received amount
+            bridge_received = float(step1.get("executedQty", 0))
+            if bridge_received <= 0:
+                for fill in step1.get("fills", []):
+                    bridge_received += float(fill.get("qty", 0))
+            if bridge_received <= 0:
+                logger.warning("LIVE %s: bridge step1 %s: 0 received", user.username, convert_pair)
+                session.add(LiveOrderLog(
+                    username=user.username, symbol=convert_pair, action="BUY", status="error",
+                    detail="bridge: 0 received", allocation=src_allocation, quote_currency=source_currency,
+                ))
+                continue
+
+            logger.info("LIVE %s: bridge step1 OK: %.6f %s za %.4f %s",
+                        user.username, bridge_received, target_quote, src_allocation, source_currency)
             session.add(LiveOrderLog(
-                username=user.username, symbol=convert_pair, action="BUY", status="error",
-                detail=f"bridge step1: {str(step1['error'])[:400]}", allocation=pln_allocation, quote_currency="PLN",
+                username=user.username, symbol=convert_pair, action="BUY", status="ok",
+                detail=f"bridge step1: {bridge_received:.6f} {target_quote}",
+                order_id=str(step1.get("orderId", "")),
+                allocation=src_allocation, quote_currency=source_currency,
             ))
-            continue  # Try next bridge
 
-        # Calculate how much bridge currency we received
-        bridge_received = float(step1.get("executedQty", 0))
-        if bridge_received <= 0:
-            for fill in step1.get("fills", []):
-                bridge_received += float(fill.get("qty", 0))
-        if bridge_received <= 0:
-            logger.warning("LIVE %s: bridge step1 %s: 0 received", user.username, convert_pair)
-            session.add(LiveOrderLog(
-                username=user.username, symbol=convert_pair, action="BUY", status="error",
-                detail="bridge: 0 received", allocation=pln_allocation, quote_currency="PLN",
-            ))
-            continue
-
-        logger.info("LIVE %s: bridge step1 OK: %.4f %s za %.2f PLN", user.username, bridge_received, bridge_quote, pln_allocation)
-        session.add(LiveOrderLog(
-            username=user.username, symbol=convert_pair, action="BUY", status="ok",
-            detail=f"bridge step1: {bridge_received:.4f} {bridge_quote}",
-            order_id=str(step1.get("orderId", "")),
-            allocation=pln_allocation, quote_currency="PLN",
-        ))
-
-        # Step 2: Buy ALT with bridge currency
-        alt_pair = f"{symbol}{bridge_quote}"
-        result = _place_buy_order(client, session, user, alt_pair, bridge_quote, bridge_received)
-        if result and result.get("status") == "ok":
-            result["detail"] = f"bridge PLN->{bridge_quote}->{symbol}"
-        return result
+            # Step 2: Buy ALT with bridge currency
+            alt_pair = f"{symbol}{target_quote}"
+            result = _place_buy_order(client, session, user, alt_pair, target_quote, bridge_received)
+            if result and result.get("status") == "ok":
+                result["detail"] = f"bridge {source_currency}->{target_quote}->{symbol}"
+            return result
 
     # Nothing worked
-    logger.info("LIVE %s: nie mozna kupic %s (brak pary/srodkow)", user.username, symbol)
+    held_summary = ", ".join(f"{k}={v:.4f}" for k, v in sorted(bal_map.items()) if v > 0.001)
+    logger.info("LIVE %s: nie mozna kupic %s (brak pary/srodkow) held=[%s]", user.username, symbol, held_summary)
     session.add(LiveOrderLog(
         username=user.username, symbol=symbol, action="BUY", status="skip",
-        detail=f"brak pary lub srodkow (PLN={bal_map.get('PLN', 0):.2f})",
+        detail=f"brak pary lub srodkow ({held_summary[:200]})",
     ))
     return {"user": user.username, "symbol": symbol, "action": "BUY", "status": "skip", "detail": "no viable pair"}
 

@@ -294,7 +294,7 @@ class BinanceClient:
                 bal_map[asset] = free
 
         if preferred_quotes is None:
-            preferred_quotes = ["PLN", "USDC", "EUR", "BTC", "BNB", "USDT", "BUSD"]
+            preferred_quotes = ["PLN", "USDC", "EUR", "BTC", "ETH", "BNB", "USDT", "BUSD"]
 
         # Try preferred quotes first, then remaining by balance
         best_pair = None

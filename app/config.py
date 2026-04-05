@@ -259,7 +259,7 @@ class Settings:
     quote_currency: str = os.getenv("AGENT_KRYPTO_QUOTE_CURRENCY", "USD").upper()
     display_currency: str = os.getenv("AGENT_KRYPTO_DISPLAY_CURRENCY", "PLN").upper()
     exchange_quote_currency: str = os.getenv("AGENT_KRYPTO_EXCHANGE_QUOTE", "USDC").upper()
-    preferred_trade_quotes: list[str] = field(default_factory=lambda: ["PLN", "USDC", "EUR", "BTC", "BNB"])
+    preferred_trade_quotes: list[str] = field(default_factory=lambda: ["PLN", "USDC", "EUR", "BTC", "ETH", "BNB"])
     binance_api_key: str = os.getenv("BINANCE_API_KEY", "")
     binance_api_secret: str = os.getenv("BINANCE_API_SECRET", "")
     tracked_symbols: list[str] = field(default_factory=lambda: DEFAULT_SYMBOLS.copy())
