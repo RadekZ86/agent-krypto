@@ -21,6 +21,7 @@ class IndicatorService:
         df = build_indicator_frame(rows)
         latest = df.iloc[-1]
         previous = df.iloc[-2] if len(df) > 1 else latest
+        prev2 = df.iloc[-3] if len(df) > 2 else previous
         trend = str(latest["trend"])
         probabilities = self.probability_engine.estimate(latest, previous)
 
@@ -63,4 +64,32 @@ class IndicatorService:
             "bottom_probability": probabilities["bottom_probability"],
             "top_probability": probabilities["top_probability"],
             "reversal_signal": probabilities["reversal_signal"],
+            # Bollinger Bands
+            "bb_upper": float(latest["bb_upper"]) if not _isnan(latest["bb_upper"]) else float(latest["close"]),
+            "bb_lower": float(latest["bb_lower"]) if not _isnan(latest["bb_lower"]) else float(latest["close"]),
+            "sma20": float(latest["sma20"]) if not _isnan(latest["sma20"]) else float(latest["close"]),
+            "vwap": float(latest["vwap"]) if not _isnan(latest["vwap"]) else float(latest["close"]),
+            # Previous bar data for divergence detection
+            "prev_close": float(previous["close"]),
+            "prev_rsi": float(previous["rsi"]),
+            "prev_macd_hist": float(previous["macd_hist"]),
+            "prev2_close": float(prev2["close"]),
+            "prev2_rsi": float(prev2["rsi"]),
+            "prev2_macd_hist": float(prev2["macd_hist"]),
+            "prev_macd": float(previous["macd"]),
+            "prev_macd_signal": float(previous["macd_signal"]),
+            # Bollinger Band width (volatility squeeze indicator)
+            "bb_width": float((latest["bb_upper"] - latest["bb_lower"]) / latest["sma20"] * 100) if not _isnan(latest["sma20"]) and latest["sma20"] != 0 else 0.0,
+            "open": float(latest["open"]),
+            "high": float(latest["high"]),
+            "low": float(latest["low"]),
+            "volume": float(latest["volume"]),
         }
+
+
+def _isnan(val) -> bool:
+    import math
+    try:
+        return math.isnan(float(val))
+    except (TypeError, ValueError):
+        return True
