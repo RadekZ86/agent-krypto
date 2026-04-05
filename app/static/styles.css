@@ -278,6 +278,7 @@ body.app-mode {
 .app-view.active {
     opacity: 1;
     visibility: visible;
+    overflow-y: auto;
 }
 
 .view-content {
