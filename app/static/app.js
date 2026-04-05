@@ -2821,10 +2821,15 @@ function initViewSwitching() {
     });
     
     // Initialize collapsible headers
-    document.querySelectorAll(".card-header.collapsible").forEach(header => {
+    document.querySelectorAll(".card-header.collapsible").forEach((header, idx) => {
+        const body = header.nextElementSibling;
+        // Help cards: collapse all except first
+        if (header.closest('.help-page') && idx > 0 && body) {
+            header.classList.add("collapsed");
+            body.style.display = "none";
+        }
         header.addEventListener("click", () => {
             header.classList.toggle("collapsed");
-            const body = header.nextElementSibling;
             if (body) {
                 body.style.display = header.classList.contains("collapsed") ? "none" : "";
             }
