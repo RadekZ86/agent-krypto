@@ -273,12 +273,15 @@ body.app-mode {
     visibility: hidden;
     transition: opacity 200ms ease, visibility 200ms ease;
     overflow: hidden;
+    content-visibility: auto;
+    contain-intrinsic-size: 0 500px;
 }
 
 .app-view.active {
     opacity: 1;
     visibility: visible;
     overflow-y: auto;
+    content-visibility: visible;
 }
 
 .view-content {
@@ -800,6 +803,14 @@ body.app-mode {
     .app-main {
         padding-bottom: 0;
         overflow: hidden;
+    }
+
+    /* ---- INSTANT VIEW SWITCHING on mobile ---- */
+    .app-view {
+        transition: none;
+    }
+    .app-view:not(.active) {
+        display: none;
     }
     
     .view-content {

@@ -294,7 +294,7 @@ class MarketDataService:
             "XLM": 0.27, "HBAR": 0.17, "FIL": 2.8, "ARB": 0.35,
             "AAVE": 180.0, "OP": 0.70, "INJ": 9.0, "ICP": 7.5,
             "VET": 0.025, "ALGO": 0.20, "SHIB": 0.000012, "PEPE": 0.0000070,
-            "SEI": 0.20, "MKR": 1500.0, "EOS": 0.75, "CRO": 0.085,
+            "SEI": 0.20, "FET": 0.55, "RENDER": 4.2, "WLD": 0.85,
             "KAS": 0.035, "MNT": 0.72, "PYTH": 0.15, "RUNE": 1.3,
         }
         base_price = base_prices.get(symbol, 1.0)

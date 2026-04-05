@@ -423,6 +423,22 @@ class LearningCenter:
         df = build_indicator_frame(rows)
         summary, insights = self._analyze_frame(df)
 
+        # Fetch recent decisions for buy/sell markers on chart
+        from sqlalchemy import desc as sql_desc
+        markers = []
+        recent_decisions = session.execute(
+            select(Decision)
+            .where(Decision.symbol == symbol, Decision.decision.in_(["BUY", "SELL"]))
+            .order_by(sql_desc(Decision.timestamp))
+            .limit(30)
+        ).scalars().all()
+        for d in recent_decisions:
+            markers.append({
+                "time": d.timestamp.strftime("%Y-%m-%d"),
+                "action": d.decision,
+                "reason": (d.reason or "")[:120],
+            })
+
         return {
             "symbol": symbol,
             "points": [
@@ -446,6 +462,7 @@ class LearningCenter:
             ],
             "summary": summary,
             "insights": insights,
+            "markers": markers,
         }
 
     def _analyze_frame(self, df) -> tuple[dict[str, Any], list[str]]:

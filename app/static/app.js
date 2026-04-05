@@ -14,9 +14,14 @@ let selectedHistoryMode = "recent";
 let selectedLifecycleInterval = "auto";
 let chartHistoryCache = {};
 let chartPackageCache = {};
-let chartHoverState = null;
-let chartHoverHandlersBound = false;
 let dashboardRefreshTimerId = null;
+
+// ==================== LIGHTWEIGHT CHARTS STATE ====================
+let lwChart = null;
+let lwCandleSeries = null;
+let lwVolumeSeries = null;
+let lwEma20Series = null;
+let lwEma50Series = null;
 
 // ==================== AUTH STATE ====================
 let currentUser = null;
@@ -707,10 +712,11 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
 }
 
 function paintChartError(message) {
-    document.getElementById("price-chart").innerHTML = "";
+    destroyLwChart();
+    const container = document.getElementById("lw-chart-container");
+    if (container) container.innerHTML = "";
     document.getElementById("chart-summary").innerHTML = `<div class="empty-state">${message}</div>`;
     document.getElementById("chart-insights").innerHTML = "";
-    setChartHoverState(null);
 }
 
 function paintWallet(wallet, binanceWallet) {
@@ -1610,790 +1616,390 @@ async function fetchLongHistory(symbol) {
 }
 
 function paintChart(chartPackage, lifecycleHistory) {
-    const chart = document.getElementById("price-chart");
+    const container = document.getElementById("lw-chart-container");
     const summary = document.getElementById("chart-summary");
     const insights = document.getElementById("chart-insights");
 
-    if (selectedHistoryMode === "max") {
-        paintLifecycleChart(chart, summary, insights, lifecycleHistory, chartPackage);
+    if (!container) return;
+
+    // Lifecycle (max) mode: use the long history
+    if (selectedHistoryMode === "max" && lifecycleHistory?.points?.length) {
+        paintLwChart(container, summary, insights, lifecycleHistory, chartPackage, true);
         return;
     }
 
     if (!chartPackage || !chartPackage.points?.length) {
-        chart.innerHTML = "";
+        destroyLwChart();
         summary.innerHTML = `<div class="empty-state">Brak danych do analizy wykresu.</div>`;
         insights.innerHTML = "";
-        setChartHoverState(null);
         return;
     }
 
-    if (selectedChartTab === "price") {
-        paintPriceTab(chart, summary, insights, chartPackage);
+    paintLwChart(container, summary, insights, chartPackage, chartPackage, false);
+}
+
+function destroyLwChart() {
+    if (lwChart) {
+        lwChart.remove();
+        lwChart = null;
+        lwCandleSeries = null;
+        lwVolumeSeries = null;
+        lwEma20Series = null;
+        lwEma50Series = null;
+    }
+}
+
+function paintLwChart(container, summary, insights, dataSource, chartPackage, isLifecycle) {
+    destroyLwChart();
+    container.innerHTML = "";
+
+    const points = isLifecycle ? dataSource.points : dataSource.points;
+    if (!points || !points.length) {
+        summary.innerHTML = `<div class="empty-state">Brak danych.</div>`;
         return;
     }
-    if (selectedChartTab === "volume") {
-        paintVolumeTab(chart, summary, insights, chartPackage);
+
+    // Determine which tab to show
+    const showOverview = selectedChartTab === "overview" || isLifecycle;
+    const showPrice = selectedChartTab === "price" && !isLifecycle;
+    const showVolume = selectedChartTab === "volume" && !isLifecycle;
+    const showRsi = selectedChartTab === "rsi" && !isLifecycle;
+    const showMacd = selectedChartTab === "macd" && !isLifecycle;
+
+    const chartHeight = window.innerWidth <= 768 ? 320 : 520;
+
+    lwChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: chartHeight,
+        layout: {
+            background: { type: 'solid', color: '#131722' },
+            textColor: '#787b86',
+            fontSize: 11,
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', sans-serif",
+        },
+        grid: {
+            vertLines: { color: 'rgba(42, 46, 57, 0.5)' },
+            horzLines: { color: 'rgba(42, 46, 57, 0.5)' },
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: { color: 'rgba(41, 98, 255, 0.4)', width: 1, style: 2, labelBackgroundColor: '#2962ff' },
+            horzLine: { color: 'rgba(41, 98, 255, 0.4)', width: 1, style: 2, labelBackgroundColor: '#2962ff' },
+        },
+        rightPriceScale: {
+            borderColor: 'rgba(42, 46, 57, 0.8)',
+            scaleMargins: { top: 0.05, bottom: showOverview ? 0.25 : 0.05 },
+        },
+        timeScale: {
+            borderColor: 'rgba(42, 46, 57, 0.8)',
+            timeVisible: true,
+            secondsVisible: false,
+            rightOffset: 3,
+        },
+        handleScroll: { vertTouchDrag: false },
+        handleScale: { axisPressedMouseMove: { time: true, price: false } },
+    });
+
+    // Prepare OHLC data
+    const series = (showOverview || showPrice ? points : points).map(p => {
+        const t = p.timestamp || p.date;
+        const time = Math.floor(new Date(t).getTime() / 1000);
+        return {
+            time,
+            open: Number(p.open ?? p.close),
+            high: Number(p.high ?? Math.max(p.open ?? p.close, p.close)),
+            low: Number(p.low ?? Math.min(p.open ?? p.close, p.close)),
+            close: Number(p.close),
+            volume: Number(p.volume || 0),
+            ema20: p.ema20 != null ? Number(p.ema20) : null,
+            ema50: p.ema50 != null ? Number(p.ema50) : null,
+            rsi: p.rsi != null ? Number(p.rsi) : null,
+            macd: p.macd != null ? Number(p.macd) : null,
+            macd_signal: p.macd_signal != null ? Number(p.macd_signal) : null,
+            macd_hist: p.macd_hist != null ? Number(p.macd_hist) : null,
+        };
+    }).sort((a, b) => a.time - b.time);
+
+    // Deduplicate by time
+    const uniqueSeries = [];
+    const seenTimes = new Set();
+    for (const p of series) {
+        if (!seenTimes.has(p.time)) {
+            seenTimes.add(p.time);
+            uniqueSeries.push(p);
+        }
+    }
+
+    if (showRsi) {
+        // RSI as line chart
+        const rsiSeries = lwChart.addLineSeries({
+            color: '#f0b44a',
+            lineWidth: 2,
+            priceScaleId: 'right',
+        });
+        rsiSeries.setData(uniqueSeries.filter(p => p.rsi != null).map(p => ({ time: p.time, value: p.rsi })));
+
+        // RSI reference lines
+        rsiSeries.createPriceLine({ price: 70, color: 'rgba(239,83,80,0.5)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Overbought' });
+        rsiSeries.createPriceLine({ price: 30, color: 'rgba(38,166,154,0.5)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Oversold' });
+        rsiSeries.createPriceLine({ price: 50, color: 'rgba(120,123,134,0.3)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+
+    } else if (showMacd) {
+        // MACD histogram
+        const histSeries = lwChart.addHistogramSeries({
+            priceScaleId: 'right',
+            priceFormat: { type: 'price', precision: 6, minMove: 0.000001 },
+        });
+        histSeries.setData(uniqueSeries.filter(p => p.macd_hist != null).map(p => ({
+            time: p.time,
+            value: p.macd_hist,
+            color: p.macd_hist >= 0 ? 'rgba(38,166,154,0.6)' : 'rgba(239,83,80,0.6)',
+        })));
+
+        // MACD line
+        const macdLine = lwChart.addLineSeries({ color: '#2962ff', lineWidth: 2, priceScaleId: 'right' });
+        macdLine.setData(uniqueSeries.filter(p => p.macd != null).map(p => ({ time: p.time, value: p.macd })));
+
+        // Signal line
+        const signalLine = lwChart.addLineSeries({ color: '#ff6d00', lineWidth: 2, priceScaleId: 'right' });
+        signalLine.setData(uniqueSeries.filter(p => p.macd_signal != null).map(p => ({ time: p.time, value: p.macd_signal })));
+
+    } else if (showVolume) {
+        // Volume bars as main
+        const volSeries = lwChart.addHistogramSeries({
+            priceScaleId: 'right',
+            priceFormat: { type: 'volume' },
+        });
+        volSeries.setData(uniqueSeries.map(p => ({
+            time: p.time,
+            value: p.volume,
+            color: p.close >= p.open ? 'rgba(38,166,154,0.7)' : 'rgba(239,83,80,0.7)',
+        })));
+
+    } else {
+        // Overview or Price: candlestick chart
+        lwCandleSeries = lwChart.addCandlestickSeries({
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderDownColor: '#ef5350',
+            borderUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+            wickUpColor: '#26a69a',
+        });
+        lwCandleSeries.setData(uniqueSeries.map(p => ({
+            time: p.time, open: p.open, high: p.high, low: p.low, close: p.close,
+        })));
+
+        // Volume overlay (bottom histogram)
+        if (showOverview) {
+            lwVolumeSeries = lwChart.addHistogramSeries({
+                priceFormat: { type: 'volume' },
+                priceScaleId: 'volume',
+            });
+            lwChart.priceScale('volume').applyOptions({
+                scaleMargins: { top: 0.82, bottom: 0 },
+            });
+            lwVolumeSeries.setData(uniqueSeries.map(p => ({
+                time: p.time,
+                value: p.volume,
+                color: p.close >= p.open ? 'rgba(38,166,154,0.25)' : 'rgba(239,83,80,0.25)',
+            })));
+        }
+
+        // EMA lines
+        if (!isLifecycle) {
+            const ema20Data = uniqueSeries.filter(p => p.ema20 != null).map(p => ({ time: p.time, value: p.ema20 }));
+            const ema50Data = uniqueSeries.filter(p => p.ema50 != null).map(p => ({ time: p.time, value: p.ema50 }));
+
+            if (ema20Data.length > 0) {
+                lwEma20Series = lwChart.addLineSeries({
+                    color: '#2962ff',
+                    lineWidth: 1,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                lwEma20Series.setData(ema20Data);
+            }
+
+            if (ema50Data.length > 0) {
+                lwEma50Series = lwChart.addLineSeries({
+                    color: '#ff6d00',
+                    lineWidth: 1,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                });
+                lwEma50Series.setData(ema50Data);
+            }
+        }
+
+        // Support/resistance price lines
+        if (chartPackage?.summary) {
+            const s = chartPackage.summary;
+            if (s.support) {
+                lwCandleSeries.createPriceLine({
+                    price: s.support, color: 'rgba(38,166,154,0.6)', lineWidth: 1, lineStyle: 2,
+                    axisLabelVisible: true, title: 'WSPARCIE',
+                });
+            }
+            if (s.resistance) {
+                lwCandleSeries.createPriceLine({
+                    price: s.resistance, color: 'rgba(239,83,80,0.6)', lineWidth: 1, lineStyle: 2,
+                    axisLabelVisible: true, title: 'OPÓR',
+                });
+            }
+        }
+
+        // Buy/sell markers from decisions
+        if (chartPackage?.markers?.length && lwCandleSeries) {
+            const timeSet = new Set(uniqueSeries.map(p => p.time));
+            const markers = chartPackage.markers
+                .map(m => {
+                    const t = Math.floor(new Date(m.time).getTime() / 1000);
+                    if (!timeSet.has(t)) return null;
+                    const isBuy = m.action === "BUY";
+                    return {
+                        time: t,
+                        position: isBuy ? 'belowBar' : 'aboveBar',
+                        color: isBuy ? '#26a69a' : '#ef5350',
+                        shape: isBuy ? 'arrowUp' : 'arrowDown',
+                        text: isBuy ? 'KUP' : 'SPRZEDAJ',
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.time - b.time);
+            // Deduplicate markers by time
+            const uniqueMarkers = [];
+            const seenMarkerTimes = new Set();
+            for (const m of markers) {
+                if (!seenMarkerTimes.has(m.time)) {
+                    seenMarkerTimes.add(m.time);
+                    uniqueMarkers.push(m);
+                }
+            }
+            if (uniqueMarkers.length) {
+                lwCandleSeries.setMarkers(uniqueMarkers);
+            }
+        }
+
+        // ATH/ATL lines for lifecycle
+        if (isLifecycle && dataSource?.summary) {
+            const ls = dataSource.summary;
+            if (ls.ath_price) {
+                lwCandleSeries.createPriceLine({
+                    price: ls.ath_price, color: 'rgba(239,83,80,0.6)', lineWidth: 1, lineStyle: 2,
+                    axisLabelVisible: true, title: `ATH ${ls.ath_date || ''}`,
+                });
+            }
+            if (ls.atl_price && ls.atl_price > 0) {
+                lwCandleSeries.createPriceLine({
+                    price: ls.atl_price, color: 'rgba(38,166,154,0.4)', lineWidth: 1, lineStyle: 2,
+                    axisLabelVisible: true, title: `ATL`,
+                });
+            }
+        }
+    }
+
+    lwChart.timeScale().fitContent();
+    
+    // Responsive resize
+    const resizeObserver = new ResizeObserver(entries => {
+        if (lwChart) {
+            const { width } = entries[0].contentRect;
+            lwChart.applyOptions({ width });
+        }
+    });
+    resizeObserver.observe(container);
+
+    // Build summary and insights
+    paintChartSummaryAndInsights(summary, insights, chartPackage, isLifecycle ? dataSource : null);
+}
+
+function paintChartSummaryAndInsights(summary, insights, chartPackage, lifecycleHistory) {
+    if (lifecycleHistory?.summary) {
+        const ls = lifecycleHistory.summary;
+        summary.innerHTML = `
+            ${buildSummaryCard("Start", formatQuote(ls.inception_price), "")}
+            ${buildSummaryCard("Teraz", formatQuote(ls.current_price), "")}
+            ${buildSummaryCard("ATH", formatQuote(ls.ath_price), "")}
+            ${buildSummaryCard("ATL", formatQuote(ls.atl_price), "")}
+            ${buildSummaryCard("Od startu", `${formatSignedPercent(ls.change_since_inception)}`, toneClass(ls.change_since_inception))}
+            ${buildSummaryCard("Lata na rynku", `${numberFormatter.format(ls.years_listed)}`, "")}
+            ${buildSummaryCard("Punkty", compactNumber(ls.points_count || 0), "")}
+            ${buildSummaryCard("Zrodlo", String(ls.history_source || "").toUpperCase(), "")}
+        `;
+        insights.innerHTML = `
+            <div class="stack-item"><div class="stack-item-title"><span>${lifecycleHistory.symbol || ""}</span><span class="badge neutral">OD STARTU</span></div><div class="stack-item-meta">Pelna historia cenowa z interaktywnym wykresem. Mozesz przybliżać, przesuwać i najeżdżać na świece.</div></div>
+        `;
         return;
     }
+
+    if (!chartPackage?.summary) {
+        summary.innerHTML = "";
+        insights.innerHTML = "";
+        return;
+    }
+
+    const s = chartPackage.summary;
+
     if (selectedChartTab === "rsi") {
-        paintRsiTab(chart, summary, insights, chartPackage);
+        summary.innerHTML = `
+            ${buildSummaryCard("RSI", `${percentFormatter.format(s.rsi)}`, toneClass(50 - s.rsi))}
+            ${buildSummaryCard("Strefa", s.rsi_zone?.toUpperCase() || "-", s.rsi_zone === "oversold" ? "positive" : s.rsi_zone === "overbought" ? "negative" : "")}
+            ${buildSummaryCard("P up", `${percentFormatter.format(s.up_probability)}%`, toneClass(s.up_probability - 50))}
+        `;
+        insights.innerHTML = `<div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">RSI</span></div><div class="stack-item-meta">RSI mierzy przegrzanie lub wykupienie rynku. Agent interpretuje go razem z trendem cenowym i wolumenem.</div></div>`;
         return;
     }
     if (selectedChartTab === "macd") {
-        paintMacdTab(chart, summary, insights, chartPackage);
+        summary.innerHTML = `
+            ${buildSummaryCard("MACD", `${percentFormatter.format(s.macd)}`, toneClass(s.macd - s.macd_signal))}
+            ${buildSummaryCard("Signal", `${percentFormatter.format(s.macd_signal)}`, "")}
+            ${buildSummaryCard("Stan", s.macd_state?.toUpperCase() || "-", s.macd_state === "bullish" ? "positive" : "negative")}
+            ${buildSummaryCard("P up", `${percentFormatter.format(s.up_probability)}%`, toneClass(s.up_probability - 50))}
+        `;
+        insights.innerHTML = `<div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">MACD</span></div><div class="stack-item-meta">MACD pokazuje momentum i zmiane trendu. Agent łączy crossover z trendem i wolumenem.</div></div>`;
+        return;
+    }
+    if (selectedChartTab === "volume") {
+        summary.innerHTML = `
+            ${buildSummaryCard("Zmiana vol.", `${percentFormatter.format(s.volume_change)}%`, toneClass(s.volume_change))}
+            ${buildSummaryCard("Trend", s.trend?.toUpperCase() || "-", s.trend === "UP" ? "positive" : s.trend === "DOWN" ? "negative" : "")}
+            ${buildSummaryCard("P up", `${percentFormatter.format(s.up_probability)}%`, toneClass(s.up_probability - 50))}
+        `;
+        insights.innerHTML = `<div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">WOLUMEN</span></div><div class="stack-item-meta">Wolumen potwierdza sile ruchow cenowych. Agent bada czy trend jest wspierany aktywnością rynku.</div></div>`;
         return;
     }
 
-    const width = 920;
-    const height = 560;
-    const paddingX = 44;
-    const series = chartPackage.points.slice(-60);
-    const panels = {
-        price: { top: 38, height: 250 },
-        volume: { top: 314, height: 76 },
-        rsi: { top: 420, height: 58 },
-        macd: { top: 500, height: 48 },
-    };
-    const priceValues = series.flatMap((point) => [point.low, point.high, point.ema20, point.ema50]);
-    const priceMin = Math.min(...priceValues, chartPackage.summary.support);
-    const priceMax = Math.max(...priceValues, chartPackage.summary.resistance);
-    const volumeMax = Math.max(...series.map((point) => point.volume), 1);
-    const rsiMin = 0;
-    const rsiMax = 100;
-    const macdValues = series.flatMap((point) => [point.macd, point.macd_signal, point.macd_hist, 0]);
-    const macdMin = Math.min(...macdValues);
-    const macdMax = Math.max(...macdValues);
-    const ema20Path = buildPanelLinePath(series, (point) => point.ema20, priceMin, priceMax, width, panels.price, paddingX);
-    const ema50Path = buildPanelLinePath(series, (point) => point.ema50, priceMin, priceMax, width, panels.price, paddingX);
-    const rsiPath = buildPanelLinePath(series, (point) => point.rsi, rsiMin, rsiMax, width, panels.rsi, paddingX);
-    const macdPath = buildPanelLinePath(series, (point) => point.macd, macdMin, macdMax, width, panels.macd, paddingX);
-    const macdSignalPath = buildPanelLinePath(series, (point) => point.macd_signal, macdMin, macdMax, width, panels.macd, paddingX);
-    const latest = series[series.length - 1];
-    const firstDate = series[0].date;
-    const lastDate = latest.date;
-
-    chart.innerHTML = `
-        ${buildMultiPanelGrid(width, panels, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#26a69a", priceMin, priceMax, width, panels.price, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ef5350", priceMin, priceMax, width, panels.price, paddingX)}
-        ${buildCandles(series, priceMin, priceMax, width, panels.price, paddingX)}
-        <path d="${ema20Path}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${ema50Path}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        ${buildVolumeBars(series, volumeMax, width, panels.volume, paddingX)}
-        ${buildRsiGuides(width, panels.rsi, paddingX)}
-        <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
-        ${buildMacdHistogram(series, macdMin, macdMax, width, panels.macd, paddingX)}
-        ${buildMacdZeroLine(macdMin, macdMax, width, panels.macd, paddingX)}
-        <path d="${macdPath}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${macdSignalPath}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        ${buildPanelLabels(width, panels, paddingX, chartPackage, latest, volumeMax)}
-        ${buildChartLegend(width, paddingX)}
-        <text x="${paddingX}" y="24" fill="#787b86" font-size="11" font-family="-apple-system,BlinkMacSystemFont,'Trebuchet MS',sans-serif">${chartPackage.symbol} · ${firstDate} – ${lastDate} · ${chartPackage.summary.source}</text>
-        <text x="${width - paddingX}" y="24" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">${formatQuote(latest.close)}</text>
-    `;
-    setChartHoverState(buildIndexChartHoverState({
-        points: series,
-        width,
-        paddingX,
-        pricePanel: panels.price,
-        priceMin,
-        priceMax,
-        overlayTop: panels.price.top,
-        overlayBottom: panels.macd.top + panels.macd.height,
-        symbol: chartPackage.symbol,
-        source: chartPackage.summary.source,
-    }));
-
+    // Overview / Price tab
     summary.innerHTML = `
-        ${buildSummaryCard("7 dni", `${formatSignedPercent(chartPackage.summary.change_7d)}`, toneClass(chartPackage.summary.change_7d))}
-        ${buildSummaryCard("30 dni", `${formatSignedPercent(chartPackage.summary.change_30d)}`, toneClass(chartPackage.summary.change_30d))}
-        ${buildSummaryCard("24h", `${formatSignedPercent(chartPackage.summary.change_24h)}`, toneClass(chartPackage.summary.change_24h))}
-        ${buildSummaryCard("Zmiennosc 14d", `${percentFormatter.format(chartPackage.summary.volatility_14d)}%`, "")}
-        ${buildSummaryCard("Wsparcie", formatQuote(chartPackage.summary.support), "")}
-        ${buildSummaryCard("Opor", formatQuote(chartPackage.summary.resistance), "")}
-        ${buildSummaryCard("EMA20", formatQuote(chartPackage.summary.ema20), "")}
-        ${buildSummaryCard("EMA50", formatQuote(chartPackage.summary.ema50), "")}
-        ${buildSummaryCard("RSI", `${percentFormatter.format(chartPackage.summary.rsi)}`, toneClass(50 - chartPackage.summary.rsi))}
-        ${buildSummaryCard("MACD", `${percentFormatter.format(chartPackage.summary.macd)}`, toneClass(chartPackage.summary.macd - chartPackage.summary.macd_signal))}
-        ${buildSummaryCard("P up", `${percentFormatter.format(chartPackage.summary.up_probability)}%`, toneClass(chartPackage.summary.up_probability - 50))}
-        ${buildSummaryCard("P dolek", `${percentFormatter.format(chartPackage.summary.bottom_probability)}%`, toneClass(chartPackage.summary.bottom_probability - 50))}
-        ${buildSummaryCard("P szczyt", `${percentFormatter.format(chartPackage.summary.top_probability)}%`, toneClass(50 - chartPackage.summary.top_probability))}
-        ${buildSummaryCard("Sygnał", chartPackage.summary.signal_alignment.toUpperCase(), chartPackage.summary.signal_alignment === "bullish" ? "positive" : chartPackage.summary.signal_alignment === "bearish" ? "negative" : "")}
+        ${buildSummaryCard("7 dni", `${formatSignedPercent(s.change_7d)}`, toneClass(s.change_7d))}
+        ${buildSummaryCard("30 dni", `${formatSignedPercent(s.change_30d)}`, toneClass(s.change_30d))}
+        ${buildSummaryCard("24h", `${formatSignedPercent(s.change_24h)}`, toneClass(s.change_24h))}
+        ${buildSummaryCard("Zmiennosc 14d", `${percentFormatter.format(s.volatility_14d)}%`, "")}
+        ${buildSummaryCard("Wsparcie", formatQuote(s.support), "")}
+        ${buildSummaryCard("Opor", formatQuote(s.resistance), "")}
+        ${buildSummaryCard("EMA20", formatQuote(s.ema20), "")}
+        ${buildSummaryCard("EMA50", formatQuote(s.ema50), "")}
+        ${buildSummaryCard("RSI", `${percentFormatter.format(s.rsi)}`, toneClass(50 - s.rsi))}
+        ${buildSummaryCard("MACD", `${percentFormatter.format(s.macd)}`, toneClass(s.macd - s.macd_signal))}
+        ${buildSummaryCard("P up", `${percentFormatter.format(s.up_probability)}%`, toneClass(s.up_probability - 50))}
+        ${buildSummaryCard("P dolek", `${percentFormatter.format(s.bottom_probability)}%`, toneClass(s.bottom_probability - 50))}
+        ${buildSummaryCard("P szczyt", `${percentFormatter.format(s.top_probability)}%`, toneClass(50 - s.top_probability))}
+        ${buildSummaryCard("Sygnał", s.signal_alignment?.toUpperCase() || "-", s.signal_alignment === "bullish" ? "positive" : s.signal_alignment === "bearish" ? "negative" : "")}
     `;
 
-    const allInsights = [...chartPackage.insights, ...(chartPackage.summary.probability_explanation || [])];
+    const allInsights = [...(chartPackage.insights || []), ...(s.probability_explanation || [])];
     insights.innerHTML = allInsights.map((item) => `
         <div class="stack-item">
             <div class="stack-item-title">
                 <span>${chartPackage.symbol}</span>
-                <span class="badge hold">WYKRES</span>
+                <span class="badge hold">ANALIZA</span>
             </div>
             <div class="stack-item-meta">${item}</div>
         </div>
     `).join("");
-}
-
-function paintPriceTab(chart, summary, insights, chartPackage) {
-    const width = 920;
-    const height = 560;
-    const paddingX = 44;
-    const panel = { top: 56, height: 430 };
-    const series = chartPackage.points.slice(-120);
-    const minValue = Math.min(...series.map((point) => point.low), chartPackage.summary.support);
-    const maxValue = Math.max(...series.map((point) => point.high), chartPackage.summary.resistance);
-    const ema20Path = buildPanelLinePath(series, (point) => point.ema20, minValue, maxValue, width, panel, paddingX);
-    const ema50Path = buildPanelLinePath(series, (point) => point.ema50, minValue, maxValue, width, panel, paddingX);
-    const latest = series[series.length - 1];
-    chart.innerHTML = `
-        ${buildSinglePanelGrid(width, panel, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.support, "SUPPORT", "#26a69a", minValue, maxValue, width, panel, paddingX)}
-        ${buildPriceReferenceLine(chartPackage.summary.resistance, "RESIST", "#ef5350", minValue, maxValue, width, panel, paddingX)}
-        ${buildCandles(series, minValue, maxValue, width, panel, paddingX)}
-        <path d="${ema20Path}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${ema50Path}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · cena · ${series.length} świec</text>
-        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">${formatQuote(latest.close)}</text>
-        ${buildChartLegend(width, paddingX)}
-    `;
-    setChartHoverState(buildIndexChartHoverState({
-        points: series,
-        width,
-        paddingX,
-        pricePanel: panel,
-        priceMin: minValue,
-        priceMax: maxValue,
-        overlayTop: panel.top,
-        overlayBottom: panel.top + panel.height,
-        symbol: chartPackage.symbol,
-        source: chartPackage.summary.source,
-    }));
-    summary.innerHTML = `
-        ${buildSummaryCard("Cena", formatQuote(chartPackage.summary.current_price), "")}
-        ${buildSummaryCard("Wsparcie", formatQuote(chartPackage.summary.support), "")}
-        ${buildSummaryCard("Opor", formatQuote(chartPackage.summary.resistance), "")}
-        ${buildSummaryCard("EMA20", formatQuote(chartPackage.summary.ema20), "")}
-        ${buildSummaryCard("EMA50", formatQuote(chartPackage.summary.ema50), "")}
-    `;
-    insights.innerHTML = `
-        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">CENA</span></div><div class="stack-item-meta">Tu agent widzi swiece, srednie EMA oraz reakcje na wsparciu i oporze. To jest glowny widok do nauki price action.</div></div>
-    `;
-}
-
-function paintVolumeTab(chart, summary, insights, chartPackage) {
-    const width = 920;
-    const height = 560;
-    const paddingX = 44;
-    const panel = { top: 56, height: 430 };
-    const series = chartPackage.points.slice(-120);
-    const volumeMax = Math.max(...series.map((point) => point.volume), 1);
-    chart.innerHTML = `
-        ${buildSinglePanelGrid(width, panel, paddingX)}
-        ${buildVolumeBars(series, volumeMax, width, panel, paddingX)}
-        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · wolumen</text>
-        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">max ${compactNumber(volumeMax)}</text>
-    `;
-    setChartHoverState(null);
-    summary.innerHTML = `
-        ${buildSummaryCard("Zmiana wolumenu", `${formatSignedPercent(chartPackage.summary.volume_change)}`, toneClass(chartPackage.summary.volume_change))}
-        ${buildSummaryCard("Trend", chartPackage.summary.trend, chartPackage.summary.trend === "UP" ? "positive" : chartPackage.summary.trend === "DOWN" ? "negative" : "")}
-    `;
-    insights.innerHTML = `
-        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">WOLUMEN</span></div><div class="stack-item-meta">Ten widok pokazuje, czy ruch ceny ma uczestnictwo rynku. Agent powinien uczyc sie odrozniania wybicia z kapitalem od pustego szarpniecia.</div></div>
-    `;
-}
-
-function paintRsiTab(chart, summary, insights, chartPackage) {
-    const width = 920;
-    const height = 560;
-    const paddingX = 44;
-    const panel = { top: 56, height: 430 };
-    const series = chartPackage.points.slice(-120);
-    const rsiPath = buildPanelLinePath(series, (point) => point.rsi, 0, 100, width, panel, paddingX);
-    chart.innerHTML = `
-        ${buildSinglePanelGrid(width, panel, paddingX)}
-        ${buildRsiGuides(width, panel, paddingX)}
-        <path d="${rsiPath}" fill="none" stroke="#f0b44a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · RSI</text>
-        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
-    `;
-    setChartHoverState(null);
-    summary.innerHTML = `
-        ${buildSummaryCard("RSI", `${percentFormatter.format(chartPackage.summary.rsi)}`, toneClass(50 - chartPackage.summary.rsi))}
-        ${buildSummaryCard("Strefa", chartPackage.summary.rsi_zone.toUpperCase(), chartPackage.summary.rsi_zone === "oversold" ? "positive" : chartPackage.summary.rsi_zone === "overbought" ? "negative" : "")}
-        ${buildSummaryCard("P dolek", `${percentFormatter.format(chartPackage.summary.bottom_probability)}%`, toneClass(chartPackage.summary.bottom_probability - 50))}
-        ${buildSummaryCard("P szczyt", `${percentFormatter.format(chartPackage.summary.top_probability)}%`, toneClass(50 - chartPackage.summary.top_probability))}
-    `;
-    insights.innerHTML = `
-        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">RSI</span></div><div class="stack-item-meta">RSI ma byc czytane w kontekscie trendu. Oversold nie oznacza automatycznie BUY, a overbought nie oznacza automatycznie SELL.</div></div>
-    `;
-}
-
-function paintMacdTab(chart, summary, insights, chartPackage) {
-    const width = 920;
-    const height = 560;
-    const paddingX = 44;
-    const panel = { top: 56, height: 430 };
-    const series = chartPackage.points.slice(-120);
-    const macdValues = series.flatMap((point) => [point.macd, point.macd_signal, point.macd_hist, 0]);
-    const minValue = Math.min(...macdValues);
-    const maxValue = Math.max(...macdValues);
-    const macdPath = buildPanelLinePath(series, (point) => point.macd, minValue, maxValue, width, panel, paddingX);
-    const macdSignalPath = buildPanelLinePath(series, (point) => point.macd_signal, minValue, maxValue, width, panel, paddingX);
-    chart.innerHTML = `
-        ${buildSinglePanelGrid(width, panel, paddingX)}
-        ${buildMacdZeroLine(minValue, maxValue, width, panel, paddingX)}
-        ${buildMacdHistogram(series, minValue, maxValue, width, panel, paddingX)}
-        <path d="${macdPath}" fill="none" stroke="#2962ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <path d="${macdSignalPath}" fill="none" stroke="#ff6d00" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${chartPackage.symbol} · MACD</text>
-        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">MACD ${percentFormatter.format(chartPackage.summary.macd)}</text>
-        ${buildChartLegend(width, paddingX)}
-    `;
-    setChartHoverState(null);
-    summary.innerHTML = `
-        ${buildSummaryCard("MACD", `${percentFormatter.format(chartPackage.summary.macd)}`, toneClass(chartPackage.summary.macd - chartPackage.summary.macd_signal))}
-        ${buildSummaryCard("Signal", `${percentFormatter.format(chartPackage.summary.macd_signal)}`, "")}
-        ${buildSummaryCard("Stan", chartPackage.summary.macd_state.toUpperCase(), chartPackage.summary.macd_state === "bullish" ? "positive" : "negative")}
-        ${buildSummaryCard("P up", `${percentFormatter.format(chartPackage.summary.up_probability)}%`, toneClass(chartPackage.summary.up_probability - 50))}
-    `;
-    insights.innerHTML = `
-        <div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge neutral">MACD</span></div><div class="stack-item-meta">MACD pokazuje momentum i zmiane reżimu. Agent powinien laczyc crossover z trendem i wolumenem, zamiast handlowac sam sygnal.</div></div>
-    `;
-}
-
-function paintLifecycleChart(chart, summary, insights, lifecycleHistory, chartPackage) {
-    if (!lifecycleHistory?.points?.length) {
-        chart.innerHTML = "";
-        summary.innerHTML = `<div class="empty-state">Brak historii od startu coina.</div>`;
-        insights.innerHTML = "";
-        setChartHoverState(null);
-        return;
-    }
-
-    const width = 920;
-    const paddingX = 44;
-    const panels = {
-        price: { top: 56, height: 322 },
-        volume: { top: 410, height: 76 },
-    };
-    const lifecycleSeries = buildLifecycleCandles(lifecycleHistory.points, 220, selectedLifecycleInterval);
-    const candles = lifecycleSeries.candles;
-    const minValue = Math.min(...candles.map((point) => Math.max(point.low, 0.00000001)), lifecycleHistory.summary.atl_price || Number.MAX_VALUE);
-    const maxValue = Math.max(...candles.map((point) => point.high), lifecycleHistory.summary.ath_price || 0);
-    const volumeMax = Math.max(...candles.map((point) => point.volume || 0), 1);
-    const minTimestamp = Math.min(...candles.map((point) => point.timestampValue));
-    const maxTimestamp = Math.max(...candles.map((point) => point.timestampValue));
-    const athY = projectPanelY(lifecycleHistory.summary.ath_price, minValue, maxValue, panels.price.top, panels.price.height);
-    const currentY = projectPanelY(lifecycleHistory.summary.current_price, minValue, maxValue, panels.price.top, panels.price.height);
-    chart.innerHTML = `
-        ${buildMultiPanelGrid(width, panels, paddingX)}
-        ${buildPriceReferenceLine(lifecycleHistory.summary.ath_price, "ATH", "#ef5350", minValue, maxValue, width, panels.price, paddingX)}
-        ${buildLifecycleCandlesSvg(candles, minValue, maxValue, width, panels.price, paddingX, minTimestamp, maxTimestamp)}
-        ${buildLifecycleVolumeBars(candles, volumeMax, width, panels.volume, paddingX, minTimestamp, maxTimestamp)}
-        <line x1="${paddingX}" y1="${athY}" x2="${width - paddingX}" y2="${athY}" stroke="rgba(239,83,80,0.45)" stroke-dasharray="6 4" stroke-width="1"></line>
-        <line x1="${paddingX}" y1="${currentY}" x2="${width - paddingX}" y2="${currentY}" stroke="rgba(38,166,154,0.45)" stroke-dasharray="6 4" stroke-width="1"></line>
-        ${buildLifecycleYearMarkers(candles, width, panels, paddingX, minTimestamp, maxTimestamp)}
-        <text x="${paddingX}" y="28" fill="#787b86" font-size="11">${lifecycleHistory.symbol} · historia · ${lifecycleHistory.summary.start_date} – ${lifecycleHistory.summary.end_date} · ${String(lifecycleHistory.summary.history_source).toUpperCase()} · ${lifecycleSeries.intervalLabel}</text>
-        <text x="${width - paddingX}" y="28" fill="#d1d4dc" font-size="12" font-weight="600" text-anchor="end">${formatQuote(lifecycleHistory.summary.current_price)}</text>
-        <text x="${paddingX}" y="${athY - 8}" fill="#ef5350" font-size="10">ATH ${formatQuote(lifecycleHistory.summary.ath_price)} · ${lifecycleHistory.summary.ath_date}</text>
-        <text x="${paddingX}" y="${currentY - 8}" fill="#26a69a" font-size="10">NOW ${formatQuote(lifecycleHistory.summary.current_price)}</text>
-        <text x="${width - paddingX}" y="${panels.volume.top - 10}" fill="#787b86" font-size="11" text-anchor="end">vol max ${compactNumber(volumeMax)}</text>
-        ${buildChartLegend(width, paddingX)}
-    `;
-    setChartHoverState(buildTimeChartHoverState({
-        points: candles,
-        width,
-        paddingX,
-        pricePanel: panels.price,
-        priceMin: minValue,
-        priceMax: maxValue,
-        overlayTop: panels.price.top,
-        overlayBottom: panels.volume.top + panels.volume.height,
-        minTimestamp,
-        maxTimestamp,
-        symbol: lifecycleHistory.symbol,
-        source: lifecycleHistory.summary.history_source,
-    }));
-    summary.innerHTML = `
-        ${buildSummaryCard("Start", formatQuote(lifecycleHistory.summary.inception_price), "")}
-        ${buildSummaryCard("Teraz", formatQuote(lifecycleHistory.summary.current_price), "")}
-        ${buildSummaryCard("ATH", formatQuote(lifecycleHistory.summary.ath_price), "")}
-        ${buildSummaryCard("ATL", formatQuote(lifecycleHistory.summary.atl_price), "")}
-        ${buildSummaryCard("Zmiana od startu", `${formatSignedPercent(lifecycleHistory.summary.change_since_inception)}`, toneClass(lifecycleHistory.summary.change_since_inception))}
-        ${buildSummaryCard("Lata na rynku", `${numberFormatter.format(lifecycleHistory.summary.years_listed)}`, "")}
-        ${buildSummaryCard("Swiece", lifecycleSeries.intervalLabel, "")}
-        ${buildSummaryCard("Punkty historii", compactNumber(lifecycleHistory.summary.points_count || lifecycleHistory.points.length), "")}
-        ${buildSummaryCard("Zrodlo", String(lifecycleHistory.summary.history_source).toUpperCase(), "")}
-    `;
-    insights.innerHTML = `
-        <div class="stack-item"><div class="stack-item-title"><span>${lifecycleHistory.symbol}</span><span class="badge neutral">OD STARTU</span></div><div class="stack-item-meta">To jest pelna historia oparta przede wszystkim o dzienne OHLC z Binance, a na ekran trafia adaptacyjnie zagregowana wersja ${lifecycleSeries.intervalLabel}, zeby wykres wygladal i czytal sie bardziej jak na Binance.</div></div>
-        ${chartPackage ? `<div class="stack-item"><div class="stack-item-title"><span>${chartPackage.symbol}</span><span class="badge hold">TRYB</span></div><div class="stack-item-meta">Widok "Od startu" pokazuje caly cykl zycia aktywa wraz z wolumenem. Zakladki RSI, MACD i wolumenu nadal sluza do nauki krotszego horyzontu.</div></div>` : ""}
-    `;
-}
-
-function buildLifecycleCandles(points, maxCandles, forcedInterval = "auto") {
-    const normalized = (points || []).map((point) => ({
-        date: point.date,
-        timestamp: point.timestamp || point.date,
-        timestampValue: Date.parse(point.timestamp || point.date),
-        open: Number(point.open ?? point.close),
-        high: Number(point.high ?? Math.max(point.open ?? point.close, point.close)),
-        low: Number(point.low ?? Math.min(point.open ?? point.close, point.close)),
-        close: Number(point.close),
-        volume: Number(point.volume || 0),
-    })).sort((left, right) => left.timestampValue - right.timestampValue);
-
-    if (!normalized.length) {
-        return { candles: [], intervalLabel: "-" };
-    }
-
-    const bucketDays = forcedInterval === "auto" ? resolveLifecycleBucketDays(normalized, maxCandles) : resolveForcedLifecycleBucketDays(forcedInterval);
-    const bucketMs = bucketDays * 24 * 60 * 60 * 1000;
-    const startTimestamp = normalized[0].timestampValue;
-    const grouped = [];
-
-    normalized.forEach((point) => {
-        const bucketIndex = Math.floor((point.timestampValue - startTimestamp) / bucketMs);
-        const existing = grouped[grouped.length - 1];
-        if (!existing || existing.bucketIndex !== bucketIndex) {
-            grouped.push({
-                bucketIndex,
-                date: point.date,
-                timestamp: point.timestamp,
-                timestampValue: point.timestampValue,
-                open: point.open,
-                high: point.high,
-                low: point.low,
-                close: point.close,
-                volume: point.volume,
-            });
-            return;
-        }
-        existing.high = Math.max(existing.high, point.high, point.close);
-        existing.low = Math.min(existing.low, point.low, point.close);
-        existing.close = point.close;
-        existing.volume += point.volume;
-    });
-
-    const candles = forcedInterval === "auto" && grouped.length > maxCandles ? compressLifecycleCandles(grouped, maxCandles) : grouped;
-    return {
-        candles,
-        intervalLabel: formatLifecycleIntervalLabel(bucketDays),
-    };
-}
-
-function buildLifecycleCandlesSvg(candles, minValue, maxValue, width, panel, paddingX, minTimestamp, maxTimestamp) {
-    return candles.map((point, index) => {
-        const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
-        const nextPoint = candles[Math.min(index + 1, candles.length - 1)];
-        const nextX = projectTimeX(nextPoint.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
-        const bodyWidth = Math.max(0.8, Math.min(8, Math.abs(nextX - x) * 0.72 || 4));
-        const openY = projectPanelY(point.open, minValue, maxValue, panel.top, panel.height);
-        const closeY = projectPanelY(point.close, minValue, maxValue, panel.top, panel.height);
-        const highY = projectPanelY(point.high, minValue, maxValue, panel.top, panel.height);
-        const lowY = projectPanelY(point.low, minValue, maxValue, panel.top, panel.height);
-        const isUp = point.close >= point.open;
-        const color = isUp ? "#26a69a" : "#ef5350";
-        const bodyY = Math.min(openY, closeY);
-        const bodyHeight = Math.max(1.2, Math.abs(closeY - openY));
-        return `
-            <line x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}" stroke="${color}" stroke-width="1.1"></line>
-            <rect x="${x - bodyWidth / 2}" y="${bodyY}" width="${bodyWidth}" height="${bodyHeight}" fill="${color}" opacity="0.88" rx="1"></rect>
-        `;
-    }).join("");
-}
-
-function buildLifecycleVolumeBars(points, volumeMax, width, panel, paddingX, minTimestamp, maxTimestamp) {
-    return points.map((point, index) => {
-        const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
-        const nextPoint = points[Math.min(index + 1, points.length - 1)];
-        const nextX = projectTimeX(nextPoint.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
-        const barWidth = Math.max(0.8, Math.min(8, Math.abs(nextX - x) * 0.72 || 4));
-        const y = projectPanelY(point.volume || 0, 0, volumeMax, panel.top, panel.height);
-        const height = Math.max(1.5, panel.top + panel.height - y);
-        const color = point.close >= point.open ? "rgba(38,166,154,0.55)" : "rgba(239,83,80,0.55)";
-        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${height}" fill="${color}" rx="1"></rect>`;
-    }).join("");
-}
-
-function buildLifecycleYearMarkers(points, width, panels, paddingX, minTimestamp, maxTimestamp) {
-    const markers = [];
-    const seenYears = new Set();
-    points.forEach((point, index) => {
-        const year = point.date.slice(0, 4);
-        if (seenYears.has(year)) {
-            return;
-        }
-        if (!point.date.endsWith("-01-01") && index !== 0) {
-            return;
-        }
-        seenYears.add(year);
-        const x = projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX);
-        markers.push(`
-            <line x1="${x}" y1="${panels.price.top}" x2="${x}" y2="${panels.volume.top + panels.volume.height}" stroke="rgba(42,46,57,0.8)" stroke-dasharray="3 6" stroke-width="1"></line>
-            <text x="${x}" y="${panels.volume.top + panels.volume.height + 18}" fill="#787b86" font-size="10" text-anchor="middle">${year}</text>
-        `);
-    });
-    return markers.join("");
-}
-
-function resolveLifecycleBucketDays(points, maxCandles) {
-    if (points.length <= maxCandles) {
-        return 1;
-    }
-    const firstTimestamp = points[0].timestampValue;
-    const lastTimestamp = points[points.length - 1].timestampValue;
-    const totalDays = Math.max(1, Math.round((lastTimestamp - firstTimestamp) / 86400000) + 1);
-    const targetBucketDays = Math.ceil(totalDays / maxCandles);
-    const supportedBuckets = [1, 3, 7, 14, 30, 60, 90, 180];
-    return supportedBuckets.find((value) => targetBucketDays <= value) || supportedBuckets[supportedBuckets.length - 1];
-}
-
-function resolveForcedLifecycleBucketDays(intervalId) {
-    const mapping = {
-        "1d": 1,
-        "1w": 7,
-        "1m": 30,
-    };
-    return mapping[intervalId] || 1;
-}
-
-function formatLifecycleIntervalLabel(bucketDays) {
-    if (bucketDays === 1) {
-        return "1D";
-    }
-    if (bucketDays === 7) {
-        return "1W";
-    }
-    if (bucketDays === 14) {
-        return "2W";
-    }
-    if (bucketDays === 30) {
-        return "1M";
-    }
-    if (bucketDays === 60) {
-        return "2M";
-    }
-    if (bucketDays === 90) {
-        return "3M";
-    }
-    if (bucketDays === 180) {
-        return "6M";
-    }
-    return `${bucketDays}D`;
-}
-
-function compressLifecycleCandles(points, maxCandles) {
-    const bucketSize = Math.ceil(points.length / maxCandles);
-    const compressed = [];
-    for (let index = 0; index < points.length; index += bucketSize) {
-        const slice = points.slice(index, index + bucketSize);
-        compressed.push({
-            bucketIndex: slice[0].bucketIndex,
-            date: slice[0].date,
-            timestamp: slice[0].timestamp,
-            timestampValue: slice[0].timestampValue,
-            open: slice[0].open,
-            high: Math.max(...slice.map((item) => item.high)),
-            low: Math.min(...slice.map((item) => item.low)),
-            close: slice[slice.length - 1].close,
-            volume: slice.reduce((sum, item) => sum + item.volume, 0),
-        });
-    }
-    return compressed;
-}
-
-function buildIndexChartHoverState({ points, width, paddingX, pricePanel, priceMin, priceMax, overlayTop, overlayBottom, symbol, source }) {
-    return {
-        width,
-        paddingX,
-        overlayTop,
-        overlayBottom,
-        symbol,
-        source,
-        points: points.map((point, index) => ({
-            ...point,
-            x: projectX(index, points.length, width, paddingX),
-            closeY: projectPanelY(point.close, priceMin, priceMax, pricePanel.top, pricePanel.height),
-        })),
-    };
-}
-
-function buildTimeChartHoverState({ points, width, paddingX, pricePanel, priceMin, priceMax, overlayTop, overlayBottom, minTimestamp, maxTimestamp, symbol, source }) {
-    return {
-        width,
-        paddingX,
-        overlayTop,
-        overlayBottom,
-        symbol,
-        source,
-        points: points.map((point) => ({
-            ...point,
-            x: projectTimeX(point.timestampValue, minTimestamp, maxTimestamp, width, paddingX),
-            closeY: projectPanelY(point.close, priceMin, priceMax, pricePanel.top, pricePanel.height),
-        })),
-    };
-}
-
-function setChartHoverState(state) {
-    chartHoverState = state;
-    initChartHoverInteractions();
-    clearChartHover();
-}
-
-function initChartHoverInteractions() {
-    if (chartHoverHandlersBound) {
-        return;
-    }
-    const chart = document.getElementById("price-chart");
-    if (!chart) {
-        return;
-    }
-    chart.addEventListener("mousemove", handleChartHoverMove);
-    chart.addEventListener("mouseleave", clearChartHover);
-    chartHoverHandlersBound = true;
-}
-
-function handleChartHoverMove(event) {
-    if (!chartHoverState?.points?.length) {
-        clearChartHover();
-        return;
-    }
-
-    const chart = document.getElementById("price-chart");
-    const rect = chart.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * chartHoverState.width;
-    const point = findNearestHoverPoint(x, chartHoverState.points);
-    if (!point) {
-        clearChartHover();
-        return;
-    }
-    renderChartHover(point);
-}
-
-function findNearestHoverPoint(targetX, points) {
-    let bestPoint = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    points.forEach((point) => {
-        const distance = Math.abs(point.x - targetX);
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            bestPoint = point;
-        }
-    });
-    return bestPoint;
-}
-
-function renderChartHover(point) {
-    const overlay = document.getElementById("chart-overlay");
-    const panel = document.getElementById("chart-hover-panel");
-    if (!overlay || !panel || !chartHoverState) {
-        return;
-    }
-
-    panel.className = point.x > chartHoverState.width * 0.58 ? "chart-hover-panel visible right" : "chart-hover-panel visible";
-    panel.innerHTML = `
-        <div class="chart-hover-head">
-            <span>${chartHoverState.symbol}</span>
-            <span class="badge neutral">${String(chartHoverState.source || "-").toUpperCase()}</span>
-        </div>
-        <div class="chart-hover-date">${formatHoverDate(point.timestamp || point.date)}</div>
-        <div class="chart-hover-grid">
-            <div class="chart-hover-item"><span>Open</span><strong>${formatQuote(point.open)}</strong></div>
-            <div class="chart-hover-item"><span>High</span><strong>${formatQuote(point.high)}</strong></div>
-            <div class="chart-hover-item"><span>Low</span><strong>${formatQuote(point.low)}</strong></div>
-            <div class="chart-hover-item"><span>Close</span><strong>${formatQuote(point.close)}</strong></div>
-            <div class="chart-hover-item"><span>Wolumen</span><strong>${compactNumber(point.volume || 0)}</strong></div>
-            <div class="chart-hover-item"><span>Zmiana</span><strong class="${toneClass(point.close - point.open)}">${formatSignedPercent(((point.close - point.open) / (point.open || 1)) * 100)}</strong></div>
-        </div>
-    `;
-
-    overlay.innerHTML = `
-        <line x1="${point.x}" y1="${chartHoverState.overlayTop}" x2="${point.x}" y2="${chartHoverState.overlayBottom}" stroke="rgba(120,123,134,0.4)" stroke-dasharray="4 4" stroke-width="1"></line>
-        <line x1="${chartHoverState.paddingX}" y1="${point.closeY}" x2="${chartHoverState.width - chartHoverState.paddingX}" y2="${point.closeY}" stroke="rgba(120,123,134,0.3)" stroke-dasharray="4 4" stroke-width="1"></line>
-        <circle cx="${point.x}" cy="${point.closeY}" r="4" fill="#131722" stroke="#2962ff" stroke-width="2"></circle>
-    `;
-}
-
-function clearChartHover() {
-    const overlay = document.getElementById("chart-overlay");
-    const panel = document.getElementById("chart-hover-panel");
-    if (overlay) {
-        overlay.innerHTML = "";
-    }
-    if (panel) {
-        panel.className = "chart-hover-panel";
-        panel.innerHTML = "";
-    }
-}
-
-function formatHoverDate(value) {
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
-        return String(value || "-");
-    }
-    return parsed.toLocaleDateString("pl-PL", { year: "numeric", month: "short", day: "2-digit" });
-}
-
-function projectTimeX(timestampValue, minTimestamp, maxTimestamp, width, padding) {
-    if (maxTimestamp <= minTimestamp) {
-        return width / 2;
-    }
-    return padding + ((width - padding * 2) * (timestampValue - minTimestamp)) / (maxTimestamp - minTimestamp);
-}
-
-function buildSinglePanelGrid(width, panel, paddingX) {
-    const rows = 5;
-    const columns = 6;
-    const horizontal = Array.from({ length: rows + 1 }, (_, index) => {
-        const y = panel.top + (panel.height / rows) * index;
-        return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.6)" stroke-width="1"></line>`;
-    }).join("");
-    const vertical = Array.from({ length: columns + 1 }, (_, index) => {
-        const x = paddingX + ((width - paddingX * 2) / columns) * index;
-        return `<line x1="${x}" y1="${panel.top}" x2="${x}" y2="${panel.top + panel.height}" stroke="rgba(42,46,57,0.4)" stroke-width="1"></line>`;
-    }).join("");
-    return horizontal + vertical;
-}
-
-function buildMultiPanelGrid(width, panels, paddingX) {
-    const columnCount = 6;
-    const panelEntries = Object.values(panels);
-    const verticalLines = Array.from({ length: columnCount + 1 }, (_, index) => {
-        const x = paddingX + ((width - paddingX * 2) / columnCount) * index;
-        return `<line x1="${x}" y1="${panelEntries[0].top}" x2="${x}" y2="${panelEntries[panelEntries.length - 1].top + panelEntries[panelEntries.length - 1].height}" stroke="rgba(42,46,57,0.4)" stroke-width="1"></line>`;
-    }).join("");
-    const horizontalLines = panelEntries.map((panel) => {
-        const rows = panel === panels.price ? 4 : 2;
-        return Array.from({ length: rows + 1 }, (_, index) => {
-            const y = panel.top + (panel.height / rows) * index;
-            return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.6)" stroke-width="1"></line>`;
-        }).join("");
-    }).join("");
-    return `${verticalLines}${horizontalLines}`;
-}
-
-function buildPanelLinePath(points, accessor, minValue, maxValue, width, panel, paddingX) {
-    return points.map((point, index) => {
-        const x = projectX(index, points.length, width, paddingX);
-        const y = projectPanelY(accessor(point), minValue, maxValue, panel.top, panel.height);
-        return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    }).join(" ");
-}
-
-function projectX(index, total, width, padding) {
-    if (total <= 1) {
-        return width / 2;
-    }
-    return padding + ((width - padding * 2) * index) / (total - 1);
-}
-
-function projectPanelY(value, minValue, maxValue, panelTop, panelHeight) {
-    if (maxValue === minValue) {
-        return panelTop + panelHeight / 2;
-    }
-    const normalized = (value - minValue) / (maxValue - minValue);
-    return panelTop + panelHeight - normalized * panelHeight;
-}
-
-function buildCandles(points, minValue, maxValue, width, panel, paddingX) {
-    const step = (width - paddingX * 2) / Math.max(points.length, 1);
-    const candleWidth = Math.max(3, Math.min(10, step * 0.62));
-    return points.map((point, index) => {
-        const x = projectX(index, points.length, width, paddingX);
-        const openY = projectPanelY(point.open, minValue, maxValue, panel.top, panel.height);
-        const closeY = projectPanelY(point.close, minValue, maxValue, panel.top, panel.height);
-        const highY = projectPanelY(point.high, minValue, maxValue, panel.top, panel.height);
-        const lowY = projectPanelY(point.low, minValue, maxValue, panel.top, panel.height);
-        const isUp = point.close >= point.open;
-        const color = isUp ? "#26a69a" : "#ef5350";
-        const bodyY = Math.min(openY, closeY);
-        const bodyHeight = Math.max(1.5, Math.abs(closeY - openY));
-        return `
-            <line x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}" stroke="${color}" stroke-width="1.4"></line>
-            <rect x="${x - candleWidth / 2}" y="${bodyY}" width="${candleWidth}" height="${bodyHeight}" fill="${color}" opacity="0.9" rx="1"></rect>
-        `;
-    }).join("");
-}
-
-function buildVolumeBars(points, maxVolume, width, panel, paddingX) {
-    const step = (width - paddingX * 2) / Math.max(points.length, 1);
-    const barWidth = Math.max(3, Math.min(10, step * 0.62));
-    return points.map((point, index) => {
-        const x = projectX(index, points.length, width, paddingX);
-        const barHeight = (point.volume / maxVolume) * panel.height;
-        const y = panel.top + panel.height - barHeight;
-        const color = point.close >= point.open ? "rgba(38,166,154,0.55)" : "rgba(239,83,80,0.55)";
-        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${Math.max(1.5, barHeight)}" fill="${color}" rx="1"></rect>`;
-    }).join("");
-}
-
-function buildRsiGuides(width, panel, paddingX) {
-    const levels = [30, 50, 70];
-    return levels.map((level) => {
-        const y = projectPanelY(level, 0, 100, panel.top, panel.height);
-        return `
-            <line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.8)" stroke-dasharray="4 4" stroke-width="1"></line>
-            <text x="${width - paddingX + 4}" y="${y + 4}" fill="#787b86" font-size="10">${level}</text>
-        `;
-    }).join("");
-}
-
-function buildMacdHistogram(points, minValue, maxValue, width, panel, paddingX) {
-    const step = (width - paddingX * 2) / Math.max(points.length, 1);
-    const barWidth = Math.max(2, Math.min(8, step * 0.52));
-    const zeroY = projectPanelY(0, minValue, maxValue, panel.top, panel.height);
-    return points.map((point, index) => {
-        const x = projectX(index, points.length, width, paddingX);
-        const valueY = projectPanelY(point.macd_hist, minValue, maxValue, panel.top, panel.height);
-        const y = Math.min(zeroY, valueY);
-        const height = Math.max(1.2, Math.abs(valueY - zeroY));
-        const color = point.macd_hist >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)";
-        return `<rect x="${x - barWidth / 2}" y="${y}" width="${barWidth}" height="${height}" fill="${color}" rx="1"></rect>`;
-    }).join("");
-}
-
-function buildMacdZeroLine(minValue, maxValue, width, panel, paddingX) {
-    const y = projectPanelY(0, minValue, maxValue, panel.top, panel.height);
-    return `<line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="rgba(42,46,57,0.8)" stroke-dasharray="4 4" stroke-width="1"></line>`;
-}
-
-function buildPriceReferenceLine(value, label, color, minValue, maxValue, width, panel, paddingX) {
-    const y = projectPanelY(value, minValue, maxValue, panel.top, panel.height);
-    return `
-        <line x1="${paddingX}" y1="${y}" x2="${width - paddingX}" y2="${y}" stroke="${color}" stroke-dasharray="6 4" stroke-width="1"></line>
-        <text x="${paddingX}" y="${y - 6}" fill="${color}" font-size="10">${label} ${formatQuote(value)}</text>
-    `;
-}
-
-function buildPanelLabels(width, panels, paddingX, chartPackage, latest, volumeMax) {
-    const volumeLabel = compactNumber(volumeMax);
-    return `
-        <text x="${paddingX}" y="${panels.price.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">Price + EMA</text>
-        <text x="${paddingX}" y="${panels.volume.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">Volume</text>
-        <text x="${width - paddingX}" y="${panels.volume.top - 10}" fill="#787b86" font-size="10" text-anchor="end">max ${volumeLabel}</text>
-        <text x="${paddingX}" y="${panels.rsi.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">RSI ${percentFormatter.format(chartPackage.summary.rsi)}</text>
-        <text x="${paddingX}" y="${panels.macd.top - 10}" fill="#d1d4dc" font-size="11" font-weight="600">MACD ${percentFormatter.format(chartPackage.summary.macd)}</text>
-        <text x="${width - paddingX}" y="${panels.macd.top - 10}" fill="#787b86" font-size="10" text-anchor="end">sig ${percentFormatter.format(chartPackage.summary.macd_signal)}</text>
-        <text x="${width - paddingX}" y="${panels.price.top - 10}" fill="#787b86" font-size="10" text-anchor="end">${formatQuote(latest.close)}</text>
-    `;
-}
-
-function buildChartLegend(width, paddingX) {
-    const items = [
-        { label: "EMA20", color: "#2962ff" },
-        { label: "EMA50", color: "#ff6d00" },
-        { label: "RSI", color: "#f0b44a" },
-        { label: "MACD", color: "#2962ff" },
-        { label: "Signal", color: "#ff6d00" },
-    ];
-    return items.map((item, index) => {
-        const x = paddingX + index * 86;
-        return `
-            <line x1="${x}" y1="548" x2="${x + 16}" y2="548" stroke="${item.color}" stroke-width="2"></line>
-            <text x="${x + 22}" y="552" fill="#787b86" font-size="10">${item.label}</text>
-        `;
-    }).join("");
 }
 
 function compactNumber(value) {
@@ -2767,21 +2373,26 @@ let currentView = "dashboard";
 
 function switchView(viewName) {
     if (viewName === currentView) return;
+
+    // Deactivate old view directly
+    const oldView = document.querySelector(`.app-view[data-view="${currentView}"]`);
+    if (oldView) oldView.classList.remove("active");
     
+    // Activate new view directly
+    const newView = document.querySelector(`.app-view[data-view="${viewName}"]`);
+    if (newView) newView.classList.add("active");
+
     // Update sidebar nav
-    document.querySelectorAll(".nav-item").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.view === viewName);
-    });
-    
+    const oldNavDesktop = document.querySelector(`.nav-item[data-view="${currentView}"]`);
+    const newNavDesktop = document.querySelector(`.nav-item[data-view="${viewName}"]`);
+    if (oldNavDesktop) oldNavDesktop.classList.remove("active");
+    if (newNavDesktop) newNavDesktop.classList.add("active");
+
     // Update mobile nav
-    document.querySelectorAll(".mobile-nav-item").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.view === viewName);
-    });
-    
-    // Update views
-    document.querySelectorAll(".app-view").forEach(view => {
-        view.classList.toggle("active", view.dataset.view === viewName);
-    });
+    const oldNavMobile = document.querySelector(`.mobile-nav-item[data-view="${currentView}"]`);
+    const newNavMobile = document.querySelector(`.mobile-nav-item[data-view="${viewName}"]`);
+    if (oldNavMobile) oldNavMobile.classList.remove("active");
+    if (newNavMobile) newNavMobile.classList.add("active");
     
     // Update title
     const titleEl = document.getElementById("view-title");
@@ -2790,6 +2401,9 @@ function switchView(viewName) {
     }
     
     currentView = viewName;
+
+    // Scroll to top on mobile
+    if (newView) newView.scrollTop = 0;
     
     // Sync duplicate elements between views if needed
     if (viewName === "portfolio") {
@@ -2798,6 +2412,9 @@ function switchView(viewName) {
     if (viewName === "calendar" && !window._calendarLoaded) {
         window._calendarLoaded = true;
         initCalendar();
+    }
+    if (viewName === "charts" && selectedSymbol && typeof lwChart !== 'undefined' && lwChart) {
+        lwChart.timeScale().fitContent();
     }
 }
 

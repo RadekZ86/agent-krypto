@@ -19,6 +19,7 @@
     
     <title>{{ app_name }}</title>
     <link rel="stylesheet" href="/static/styles.css?v={{ static_assets_version }}">
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body class="app-mode">
     
@@ -377,10 +378,8 @@
                 </div>
                 <div class="charts-layout">
                     <div class="card chart-card">
-                        <div class="chart-stage">
-                            <svg id="price-chart" class="chart-svg" viewBox="0 0 920 560" preserveAspectRatio="none"></svg>
-                            <svg id="chart-overlay" class="chart-svg chart-overlay" viewBox="0 0 920 560" preserveAspectRatio="none" aria-hidden="true"></svg>
-                            <div id="chart-hover-panel" class="chart-hover-panel" aria-hidden="true"></div>
+                        <div class="chart-stage" id="chart-stage">
+                            <div id="lw-chart-container" style="width:100%;height:100%;"></div>
                         </div>
                         <div id="chart-summary" class="summary-grid"></div>
                         <div id="chart-insights" class="stack-list compact"></div>

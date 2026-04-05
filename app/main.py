@@ -401,14 +401,18 @@ def calendar_data(request: Request, year: int | None = None, month: int | None =
     with SessionLocal() as session:
         current_user = resolve_request_user(request)
 
-        # --- Live orders (LIVE mode) ---
-        live_rows = session.execute(
+        # --- Live orders (LIVE mode) — filtered by user ---
+        live_query = (
             select(LiveOrderLog)
             .where(
                 LiveOrderLog.created_at >= datetime.combine(start, datetime.min.time()),
                 LiveOrderLog.created_at <= datetime.combine(end, datetime.max.time()),
             )
-            .order_by(LiveOrderLog.created_at)
+        )
+        if current_user is not None:
+            live_query = live_query.where(LiveOrderLog.username == current_user.username)
+        live_rows = session.execute(
+            live_query.order_by(LiveOrderLog.created_at)
         ).scalars().all()
 
         # --- Paper trades ---
