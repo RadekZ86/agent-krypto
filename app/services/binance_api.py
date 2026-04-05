@@ -167,6 +167,7 @@ class BinanceClient:
         stop_price: Optional[float] = None
     ) -> dict:
         """Create a new order."""
+        import math
         params = {
             "symbol": symbol,
             "side": side,
@@ -176,7 +177,9 @@ class BinanceClient:
         if quantity:
             params["quantity"] = f"{quantity:.8f}"
         if quote_quantity:
-            params["quoteOrderQty"] = f"{quote_quantity:.2f}"
+            # Floor to 2 decimals to avoid exceeding available balance
+            floored = math.floor(quote_quantity * 100) / 100
+            params["quoteOrderQty"] = f"{floored:.2f}"
         if price:
             params["price"] = f"{price:.8f}"
         if order_type in ("LIMIT", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"):
@@ -291,7 +294,7 @@ class BinanceClient:
                 bal_map[asset] = free
 
         if preferred_quotes is None:
-            preferred_quotes = ["USDT", "PLN", "BUSD", "BTC", "BNB", "EUR"]
+            preferred_quotes = ["PLN", "USDC", "EUR", "BTC", "BNB", "USDT", "BUSD"]
 
         # Try preferred quotes first, then remaining by balance
         best_pair = None

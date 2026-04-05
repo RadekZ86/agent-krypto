@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 def _mirror_to_live_users(session: Session, symbol: str, action: str, market_price: float) -> list[dict]:
     """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key.
-    Auto-detects available trading pairs and adjusts allocation to user's balance."""
+    Auto-detects available trading pairs and adjusts allocation to user's balance.
+    Supports bridge-buy: PLN → USDC → ALT when no direct pair exists."""
     from app.models import User, UserAPIKey, LiveOrderLog
     from app.services.auth import APIKeyService
     from app.services.binance_api import BinanceService
@@ -57,47 +58,9 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 continue
 
             if action == "BUY":
-                pair, quote_asset, quote_bal = client.find_best_pair(symbol, balances)
-                if pair is None:
-                    logger.info("LIVE %s: brak dostepnej pary dla %s", user.username, symbol)
-                    results.append({"user": user.username, "symbol": symbol, "action": action, "status": "skip", "detail": "no pair"})
-                    session.add(LiveOrderLog(username=user.username, symbol=symbol, action=action, status="skip", detail="brak pary"))
-                    continue
-                if quote_bal <= 0:
-                    logger.info("LIVE %s: brak srodkow %s dla %s", user.username, quote_asset, pair)
-                    results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": "no balance"})
-                    session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="skip", detail=f"brak {quote_asset}", quote_currency=quote_asset))
-                    continue
-
-                # Dynamic allocation based on user settings
-                alloc_mode = getattr(user, 'live_alloc_mode', None) or 'percent'
-                alloc_value = getattr(user, 'live_alloc_value', None)
-                if alloc_value is None:
-                    alloc_value = 10.0
-
-                if alloc_mode == 'max':
-                    allocation = quote_bal
-                elif alloc_mode == 'fixed':
-                    allocation = min(alloc_value, quote_bal)
-                else:  # percent
-                    allocation = quote_bal * (alloc_value / 100.0)
-                # Ensure minimum order value (Binance minNotional is 25 PLN / 10 USDT)
-                min_order = 25.0 if quote_asset == "PLN" else 10.0
-                if allocation < min_order:
-                    if quote_bal >= min_order:
-                        allocation = min_order
-                    else:
-                        logger.info("LIVE %s: za malo %s (%.2f) na %s", user.username, quote_asset, quote_bal, pair)
-                        results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": f"low balance {quote_bal:.2f} {quote_asset}"})
-                        session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="skip", detail=f"za malo: {quote_bal:.2f} {quote_asset}", allocation=allocation, quote_currency=quote_asset))
-                        continue
-
-                order = client.create_order(
-                    symbol=pair,
-                    side="BUY",
-                    order_type="MARKET",
-                    quote_quantity=allocation,
-                )
+                order_result = _execute_live_buy(client, session, user, symbol, balances)
+                if order_result is not None:
+                    results.append(order_result)
             elif action == "SELL":
                 held = 0.0
                 for b in balances:
@@ -114,29 +77,234 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     # Fallback to configured pair
                     pair = settings.binance_symbols.get(symbol, f"{symbol}{settings.exchange_quote_currency}")
 
+                # Adjust quantity to LOT_SIZE stepSize to avoid Filter failure
+                sell_qty = _floor_to_step_size(client, pair, held)
+                if sell_qty <= 0:
+                    logger.info("LIVE %s: %s ilosc %.8f ponizej minQty dla %s", user.username, symbol, held, pair)
+                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip", detail=f"qty {held:.8f} < minQty"))
+                    continue
+
                 order = client.create_order(
                     symbol=pair,
                     side="SELL",
                     order_type="MARKET",
-                    quantity=held,
+                    quantity=sell_qty,
                 )
-            else:
-                continue
 
-            if "error" in order:
-                logger.warning("LIVE %s: blad zlecenia %s %s: %s", user.username, action, pair, order["error"])
-                results.append({"user": user.username, "symbol": pair, "action": action, "status": "error", "detail": order["error"]})
-                session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="error", detail=str(order["error"])[:500]))
-            else:
-                logger.info("LIVE %s: %s %s OK orderId=%s", user.username, action, pair, order.get("orderId"))
-                results.append({"user": user.username, "symbol": pair, "action": action, "status": "ok", "order_id": order.get("orderId")})
-                session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="ok", order_id=str(order.get("orderId", "")), allocation=allocation if action == "BUY" else None))
+                if "error" in order:
+                    logger.warning("LIVE %s: blad zlecenia SELL %s: %s", user.username, pair, order["error"])
+                    results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "error", "detail": order["error"]})
+                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="error", detail=str(order["error"])[:500]))
+                else:
+                    logger.info("LIVE %s: SELL %s OK orderId=%s", user.username, pair, order.get("orderId"))
+                    results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "ok", "order_id": order.get("orderId")})
+                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="ok", order_id=str(order.get("orderId", ""))))
         except Exception as exc:
             logger.exception("LIVE %s: wyjatek przy %s %s", user.username, action, symbol)
             results.append({"user": user.username, "symbol": symbol, "action": action, "status": "exception", "detail": str(exc)})
             session.add(LiveOrderLog(username=user.username, symbol=symbol, action=action, status="exception", detail=str(exc)[:500]))
 
     return results
+
+
+# Bridge currencies to try when direct pair is not available or has no balance.
+# Order: try direct PLN first, then USDC (most altcoin pairs on Binance PL), then EUR, BTC, BNB.
+_BRIDGE_QUOTES = ["PLN", "USDC", "EUR", "BTC", "BNB"]
+
+# Min order values per quote currency (Binance minNotional)
+_MIN_ORDER = {"PLN": 25.0, "USDC": 5.0, "EUR": 5.0, "BTC": 0.0001, "BNB": 0.01}
+
+# Cache for symbol LOT_SIZE info
+_lot_size_cache: dict[str, tuple[float, float]] = {}
+
+
+def _floor_to_step_size(client, pair: str, qty: float) -> float:
+    """Floor quantity to the pair's LOT_SIZE stepSize and check minQty."""
+    import math
+    if pair not in _lot_size_cache:
+        info = client.get_exchange_info(symbol=pair)
+        min_qty = 0.00000001
+        step_size = 0.00000001
+        for sym in info.get("symbols", []):
+            if sym["symbol"] == pair:
+                for f in sym.get("filters", []):
+                    if f["filterType"] == "LOT_SIZE":
+                        min_qty = float(f["minQty"])
+                        step_size = float(f["stepSize"])
+                        break
+                break
+        _lot_size_cache[pair] = (min_qty, step_size)
+
+    min_qty, step_size = _lot_size_cache[pair]
+    if qty < min_qty:
+        return 0.0
+    if step_size > 0:
+        floored = math.floor(qty / step_size) * step_size
+        return floored if floored >= min_qty else 0.0
+    return qty
+
+
+def _get_allocation(user, quote_bal: float) -> float:
+    """Calculate trade allocation from user settings."""
+    alloc_mode = getattr(user, 'live_alloc_mode', None) or 'percent'
+    alloc_value = getattr(user, 'live_alloc_value', None)
+    if alloc_value is None:
+        alloc_value = 10.0
+    if alloc_mode == 'max':
+        return quote_bal
+    elif alloc_mode == 'fixed':
+        return min(alloc_value, quote_bal)
+    else:
+        return quote_bal * (alloc_value / 100.0)
+
+
+def _execute_live_buy(client, session: Session, user, symbol: str, balances: list[dict]) -> dict | None:
+    """Execute a LIVE BUY for a symbol, including bridge-buy logic.
+    Returns result dict or None if nothing to report."""
+    from app.models import LiveOrderLog
+
+    # 1. Try direct buy (find_best_pair already checks balance)
+    pair, quote_asset, quote_bal = client.find_best_pair(symbol, balances)
+
+    if pair is not None and quote_bal > 0:
+        allocation = _get_allocation(user, quote_bal)
+        min_order = _MIN_ORDER.get(quote_asset, 5.0)
+        if allocation >= min_order:
+            return _place_buy_order(client, session, user, pair, quote_asset, allocation)
+        elif quote_bal >= min_order:
+            return _place_buy_order(client, session, user, pair, quote_asset, min_order)
+        # else: balance too low for this pair, try bridge below
+
+    # 2. Try bridge-buy: convert user's available currency → bridge quote → ALT
+    tradeable_pairs = client.get_tradeable_pairs()
+    alt_quotes = tradeable_pairs.get(symbol, [])
+    if not alt_quotes:
+        logger.info("LIVE %s: brak dostepnej pary dla %s", user.username, symbol)
+        session.add(LiveOrderLog(username=user.username, symbol=symbol, action="BUY", status="skip", detail="brak pary na gieldzie"))
+        return {"user": user.username, "symbol": symbol, "action": "BUY", "status": "skip", "detail": "no tradeable pair"}
+
+    # Build balance map
+    bal_map: dict[str, float] = {}
+    for b in balances:
+        free = float(b.get("free", 0))
+        if free > 0:
+            bal_map[b["asset"]] = free
+
+    # Try each bridge: find a currency user HAS that can be converted to a quote the ALT accepts
+    for bridge_quote in _BRIDGE_QUOTES:
+        if bridge_quote not in alt_quotes:
+            continue  # ALT doesn't trade against this quote
+
+        bridge_bal = bal_map.get(bridge_quote, 0.0)
+        min_order = _MIN_ORDER.get(bridge_quote, 5.0)
+
+        if bridge_bal >= min_order:
+            # User already has this bridge currency with enough balance
+            alt_pair = f"{symbol}{bridge_quote}"
+            allocation = _get_allocation(user, bridge_bal)
+            if allocation < min_order:
+                allocation = min_order
+            if allocation > bridge_bal:
+                allocation = bridge_bal
+            return _place_buy_order(client, session, user, alt_pair, bridge_quote, allocation)
+
+        # Check if we can convert PLN → bridge_quote (e.g. PLN → USDC)
+        if bridge_quote == "PLN":
+            continue  # PLN is source, not target
+        pln_bal = bal_map.get("PLN", 0.0)
+        if pln_bal < 25.0:
+            continue  # Not enough PLN
+        # Check if bridge_quote can be bought with PLN (e.g. USDCPLN exists)
+        bridge_pln_quotes = tradeable_pairs.get(bridge_quote, [])
+        if "PLN" not in bridge_pln_quotes:
+            continue
+
+        # === BRIDGE BUY: PLN → bridge_quote → ALT ===
+        pln_allocation = _get_allocation(user, pln_bal)
+        if pln_allocation < 25.0:
+            pln_allocation = min(25.0, pln_bal)
+        if pln_allocation < 25.0:
+            continue
+
+        logger.info("LIVE %s: bridge buy %s via PLN->%s (%.2f PLN)", user.username, symbol, bridge_quote, pln_allocation)
+
+        # Step 1: Buy bridge quote with PLN
+        convert_pair = f"{bridge_quote}PLN"
+        step1 = client.create_order(
+            symbol=convert_pair,
+            side="BUY",
+            order_type="MARKET",
+            quote_quantity=pln_allocation,
+        )
+        if "error" in step1:
+            logger.warning("LIVE %s: bridge step1 %s error: %s", user.username, convert_pair, step1["error"])
+            session.add(LiveOrderLog(
+                username=user.username, symbol=convert_pair, action="BUY", status="error",
+                detail=f"bridge step1: {str(step1['error'])[:400]}", allocation=pln_allocation, quote_currency="PLN",
+            ))
+            continue  # Try next bridge
+
+        # Calculate how much bridge currency we received
+        bridge_received = float(step1.get("executedQty", 0))
+        if bridge_received <= 0:
+            for fill in step1.get("fills", []):
+                bridge_received += float(fill.get("qty", 0))
+        if bridge_received <= 0:
+            logger.warning("LIVE %s: bridge step1 %s: 0 received", user.username, convert_pair)
+            session.add(LiveOrderLog(
+                username=user.username, symbol=convert_pair, action="BUY", status="error",
+                detail="bridge: 0 received", allocation=pln_allocation, quote_currency="PLN",
+            ))
+            continue
+
+        logger.info("LIVE %s: bridge step1 OK: %.4f %s za %.2f PLN", user.username, bridge_received, bridge_quote, pln_allocation)
+        session.add(LiveOrderLog(
+            username=user.username, symbol=convert_pair, action="BUY", status="ok",
+            detail=f"bridge step1: {bridge_received:.4f} {bridge_quote}",
+            order_id=str(step1.get("orderId", "")),
+            allocation=pln_allocation, quote_currency="PLN",
+        ))
+
+        # Step 2: Buy ALT with bridge currency
+        alt_pair = f"{symbol}{bridge_quote}"
+        result = _place_buy_order(client, session, user, alt_pair, bridge_quote, bridge_received)
+        if result and result.get("status") == "ok":
+            result["detail"] = f"bridge PLN->{bridge_quote}->{symbol}"
+        return result
+
+    # Nothing worked
+    logger.info("LIVE %s: nie mozna kupic %s (brak pary/srodkow)", user.username, symbol)
+    session.add(LiveOrderLog(
+        username=user.username, symbol=symbol, action="BUY", status="skip",
+        detail=f"brak pary lub srodkow (PLN={bal_map.get('PLN', 0):.2f})",
+    ))
+    return {"user": user.username, "symbol": symbol, "action": "BUY", "status": "skip", "detail": "no viable pair"}
+
+
+def _place_buy_order(client, session: Session, user, pair: str, quote_asset: str, allocation: float) -> dict:
+    """Place a market buy order and log the result."""
+    from app.models import LiveOrderLog
+
+    order = client.create_order(
+        symbol=pair,
+        side="BUY",
+        order_type="MARKET",
+        quote_quantity=allocation,
+    )
+    if "error" in order:
+        logger.warning("LIVE %s: blad zlecenia BUY %s: %s", user.username, pair, order["error"])
+        session.add(LiveOrderLog(
+            username=user.username, symbol=pair, action="BUY", status="error",
+            detail=str(order["error"])[:500], allocation=allocation, quote_currency=quote_asset,
+        ))
+        return {"user": user.username, "symbol": pair, "action": "BUY", "status": "error", "detail": order["error"]}
+    else:
+        logger.info("LIVE %s: BUY %s OK orderId=%s alloc=%.4f %s", user.username, pair, order.get("orderId"), allocation, quote_asset)
+        session.add(LiveOrderLog(
+            username=user.username, symbol=pair, action="BUY", status="ok",
+            order_id=str(order.get("orderId", "")), allocation=allocation, quote_currency=quote_asset,
+        ))
+        return {"user": user.username, "symbol": pair, "action": "BUY", "status": "ok", "order_id": order.get("orderId")}
 
 
 class AgentCycle:
