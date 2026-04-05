@@ -707,22 +707,51 @@ function paintWallet(wallet, binanceWallet) {
     
     // Mobile hero card update
     const heroBalance = document.getElementById("mobile-hero-balance");
-    if (heroBalance) {
-        if (binanceWallet) {
-            const walletQuote = binanceWallet.quote_currency || "USDT";
+    const heroProfit = document.getElementById("mobile-hero-profit");
+    const heroLoss = document.getElementById("mobile-hero-loss");
+    const heroWinrate = document.getElementById("mobile-hero-winrate");
+
+    if (binanceWallet) {
+        const walletQuote = binanceWallet.quote_currency || "USDT";
+        const holdings = binanceWallet.holdings || [];
+        const quoteAsset = holdings.find(h => h.asset === walletQuote);
+        const cashValue = quoteAsset ? quoteAsset.free : 0;
+        const cryptoValue = (binanceWallet.total_value || 0) - cashValue;
+
+        if (heroBalance) {
             heroBalance.textContent = formatQuote(binanceWallet.total_value || 0, walletQuote);
             heroBalance.style.color = "var(--positive)";
-        } else {
+        }
+
+        // Relabel mobile hero stats for LIVE
+        const heroBalanceLabel = document.querySelector(".mobile-hero-main .mobile-hero-label");
+        if (heroBalanceLabel) heroBalanceLabel.textContent = "Portfel Binance";
+
+        const heroStatDivs = document.querySelectorAll(".mobile-hero-stat");
+        if (heroStatDivs[0]) heroStatDivs[0].querySelector("span").textContent = `Wolne ${walletQuote}`;
+        if (heroStatDivs[1]) heroStatDivs[1].querySelector("span").textContent = "W krypto";
+        if (heroStatDivs[2]) heroStatDivs[2].querySelector("span").textContent = "Aktywow";
+
+        if (heroProfit) {
+            heroProfit.textContent = formatQuote(cashValue, walletQuote);
+            heroProfit.style.color = "var(--positive)";
+        }
+        if (heroLoss) {
+            heroLoss.textContent = formatQuote(cryptoValue, walletQuote);
+            heroLoss.style.color = "var(--positive)";
+            heroLoss.closest(".mobile-hero-stat")?.classList.remove("negative");
+            heroLoss.closest(".mobile-hero-stat")?.classList.add("positive");
+        }
+        if (heroWinrate) heroWinrate.textContent = holdings.filter(h => h.asset !== walletQuote).length.toString();
+    } else {
+        if (heroBalance) {
             heroBalance.textContent = formatQuote(wallet.realized_profit);
             heroBalance.style.color = wallet.realized_profit >= 0 ? "var(--positive)" : "var(--negative)";
         }
+        if (heroProfit) heroProfit.textContent = formatQuote(wallet.gross_profit);
+        if (heroLoss) heroLoss.textContent = formatQuote(wallet.gross_loss);
+        if (heroWinrate) heroWinrate.textContent = `${percentFormatter.format(wallet.win_rate)}%`;
     }
-    const heroProfit = document.getElementById("mobile-hero-profit");
-    if (heroProfit) heroProfit.textContent = formatQuote(wallet.gross_profit);
-    const heroLoss = document.getElementById("mobile-hero-loss");
-    if (heroLoss) heroLoss.textContent = formatQuote(wallet.gross_loss);
-    const heroWinrate = document.getElementById("mobile-hero-winrate");
-    if (heroWinrate) heroWinrate.textContent = `${percentFormatter.format(wallet.win_rate)}%`;
 }
 
 function paintModeStrip(systemStatus, config, wallet) {
