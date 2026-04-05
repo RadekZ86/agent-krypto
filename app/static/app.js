@@ -2653,7 +2653,8 @@ const viewTitles = {
     portfolio: "Portfel",
     activity: "Aktywnosc",
     ai: "AI Advisor",
-    settings: "Status"
+    settings: "Status",
+    help: "Pomoc"
 };
 
 let currentView = "dashboard";

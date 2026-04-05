@@ -2788,3 +2788,179 @@ th {
 .install-prompt-actions button {
     flex: 1;
 }
+
+/* ===== Help / Pomoc page ===== */
+.help-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 800px;
+    padding-bottom: 100px;
+}
+
+.help-card .card-body {
+    font-size: 0.92rem;
+    line-height: 1.7;
+    color: var(--muted);
+}
+
+.help-card .card-body p {
+    margin: 0 0 10px;
+}
+
+.help-card .card-body h4 {
+    color: var(--text);
+    margin: 18px 0 8px;
+    font-size: 0.95rem;
+}
+
+.help-card .card-body h4:first-child {
+    margin-top: 0;
+}
+
+.help-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 12px;
+}
+
+.help-list li {
+    padding: 6px 0 6px 20px;
+    position: relative;
+}
+
+.help-list li::before {
+    content: "\2022";
+    color: var(--accent);
+    position: absolute;
+    left: 4px;
+    font-weight: bold;
+}
+
+.help-list li code {
+    background: var(--panel-strong);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: var(--accent);
+}
+
+.help-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.help-step {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+.step-number {
+    min-width: 32px;
+    height: 32px;
+    background: var(--accent);
+    color: #000;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.help-step p {
+    margin: 4px 0 0;
+    color: var(--muted);
+}
+
+.help-step strong {
+    color: var(--text);
+}
+
+.help-step a {
+    color: var(--accent);
+}
+
+.help-warning {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: rgba(255, 193, 7, 0.08);
+    border-left: 3px solid #ffc107;
+    border-radius: 6px;
+}
+
+.help-warning strong {
+    color: #ffc107;
+    display: block;
+    margin-bottom: 6px;
+}
+
+.help-warning p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.88rem;
+}
+
+.help-features {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.help-feature {
+    padding: 10px 14px;
+    background: var(--panel-strong);
+    border-radius: 8px;
+}
+
+.help-feature strong {
+    color: var(--text);
+    display: block;
+    margin-bottom: 4px;
+}
+
+.help-feature p {
+    margin: 0;
+}
+
+.help-feature .status-pill {
+    margin-bottom: 6px;
+}
+
+.help-faq details {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 0;
+}
+
+.help-faq details:last-child {
+    border-bottom: none;
+}
+
+.help-faq summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text);
+    padding: 4px 0;
+    list-style: none;
+}
+
+.help-faq summary::before {
+    content: "\25B6";
+    display: inline-block;
+    margin-right: 8px;
+    font-size: 0.7em;
+    transition: transform 0.2s;
+    color: var(--accent);
+}
+
+.help-faq details[open] summary::before {
+    transform: rotate(90deg);
+}
+
+.help-faq details p {
+    margin: 8px 0 0 20px;
+    color: var(--muted);
+}

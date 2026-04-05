@@ -106,6 +106,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 <span>Status</span>
             </button>
+            <button class="nav-item" data-view="help" title="Pomoc">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span>Pomoc</span>
+            </button>
         </nav>
         <div class="sidebar-footer">
             <button id="reset-paper-button" class="sidebar-btn" title="Reset portfela">
@@ -568,6 +572,280 @@
                 </div>
             </div>
         </section>
+
+        <!-- ===== POMOC / INSTRUKCJA ===== -->
+        <section class="app-view" data-view="help">
+            <div class="help-page">
+
+                <!-- Co to jest Agent Krypto -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Co to jest Agent Krypto?</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Agent Krypto</strong> to osobisty asystent tradingowy, ktory automatycznie analizuje rynek kryptowalut i podejmuje decyzje kupna/sprzedazy.</p>
+                        <ul class="help-list">
+                            <li><strong>Tryb PAPER</strong> — symulowany handel wirtualnym kapitalem. Bez ryzyka. Idealny do nauki i testowania strategii.</li>
+                            <li><strong>Tryb LIVE</strong> — agent wysyla prawdziwe zlecenia na Twoje konto Binance. Wymaga klucza API.</li>
+                        </ul>
+                        <p>Agent analizuje wskazniki techniczne (RSI, MACD, trend, wolumen), uczy sie na wlasnych blędach i wykorzystuje AI do oceny rynku. Kazdy cykl (co 2 minuty) agent sprawdza rynek i decyduje: <span class="status-pill buy">BUY</span>, <span class="status-pill sell">SELL</span> lub <span class="status-pill hold">HOLD</span>.</p>
+                    </div>
+                </div>
+
+                <!-- Jak dziala -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Jak to dziala?</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+                        <div class="help-steps">
+                            <div class="help-step">
+                                <span class="step-number">1</span>
+                                <div>
+                                    <strong>Pobranie danych rynkowych</strong>
+                                    <p>Agent pobiera ceny, wolumen i dane OHLCV z Binance co 15 minut.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">2</span>
+                                <div>
+                                    <strong>Analiza techniczna</strong>
+                                    <p>Oblicza RSI, MACD, srednie kroczace (EMA), zmiane wolumenu, rozpoznaje formacje swieczek.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">3</span>
+                                <div>
+                                    <strong>Silnik decyzyjny</strong>
+                                    <p>Laczy wskazniki z regułami agenta (ostrozny / normalny / ryzykowny) i generuje decyzje BUY/SELL/HOLD z poziomem pewnosci.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">4</span>
+                                <div>
+                                    <strong>Realizacja zlecen</strong>
+                                    <p>W trybie PAPER — symulacja. W trybie LIVE — zlecenie market na Binance Spot.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">5</span>
+                                <div>
+                                    <strong>Nauka i adaptacja</strong>
+                                    <p>Agent analizuje wyniki swoich decyzji, uczy sie z bledow i dostosowuje strategie.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Jak podlaczyc Binance API -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Jak podlaczyc konto Binance?</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+                        <div class="help-steps">
+                            <div class="help-step">
+                                <span class="step-number">1</span>
+                                <div>
+                                    <strong>Zaloguj sie na <a href="https://www.binance.com" target="_blank" rel="noopener">binance.com</a></strong>
+                                    <p>Przejdz do: Profil → Zarzadzanie API → Utworz klucz API.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">2</span>
+                                <div>
+                                    <strong>Ustaw uprawnienia klucza</strong>
+                                    <p>Wlacz: <code>Odczyt</code> + <code>Spot Trading</code>. <strong>NIE wlaczaj</strong> wypłat (Withdrawals) — dla bezpieczenstwa.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">3</span>
+                                <div>
+                                    <strong>Ogranicz dostep po IP</strong>
+                                    <p>Dodaj IP serwera Agent Krypto: <code>77.79.248.3</code> — to gwarantuje, ze nikt inny nie uzyje Twojego klucza.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">4</span>
+                                <div>
+                                    <strong>Wklej klucze w Agent Krypto</strong>
+                                    <p>Kliknij ikone <strong>uzytkownika</strong> (prawy gorny rog) → <strong>KASA I API</strong> → wklej API Key i Secret → <strong>Zapisz</strong>.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">5</span>
+                                <div>
+                                    <strong>Gotowe!</strong>
+                                    <p>Dashboard przelacza sie automatycznie na tryb LIVE. Zobaczysz swoje realne saldo i kryptowaluty.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="help-warning">
+                            <strong>⚠ Bezpieczenstwo kluczy API</strong>
+                            <p>Klucze sa szyfrowane po stronie serwera (XOR + base64). Nigdy nie wlaczaj uprawnien do wyplat. Zawsze ograniczaj klucz do jednego IP.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Zakladki i funkcje -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Zakladki i funkcje</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+                        <div class="help-features">
+                            <div class="help-feature">
+                                <strong>Dashboard</strong>
+                                <p>Przeglad portfela, bilans, najwazniejsze metryki, tryb agenta i scheduler.</p>
+                            </div>
+                            <div class="help-feature">
+                                <strong>Rynek</strong>
+                                <p>Aktualne ceny, wolumen, RSI, MACD, trend i prawdopodobienstwo wzrostu dla kazdej sledzonej krypto.</p>
+                            </div>
+                            <div class="help-feature">
+                                <strong>Wykresy</strong>
+                                <p>Interaktywne wykresy swieczek (candlestick) z naniesionymi wskaznikami i strefami wsparcia/oporu.</p>
+                            </div>
+                            <div class="help-feature">
+                                <strong>Portfel</strong>
+                                <p>Struktura kapitalu, otwarte pozycje, historia transakcji.</p>
+                            </div>
+                            <div class="help-feature">
+                                <strong>AI Advisor</strong>
+                                <p>Komentarz AI (GPT-4.1 nano) do biezacej sytuacji rynkowej i stanu portfela. Materialy edukacyjne.</p>
+                            </div>
+                            <div class="help-feature">
+                                <strong>Status</strong>
+                                <p>Stan schedulera, zrodla danych, uzycie API, backtest strategii.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tryby agenta -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Tryby agenta</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+                        <div class="help-features">
+                            <div class="help-feature">
+                                <span class="status-pill hold">Ostrozny</span>
+                                <p>Max 6 wejsc dziennie, 5 otwartych pozycji, 5% eksploracji. Najmniejsze ryzyko.</p>
+                            </div>
+                            <div class="help-feature">
+                                <span class="status-pill buy">Normalny</span>
+                                <p>Max 12 wejsc dziennie, 10 pozycji, 12% eksploracji. Zbalansowane podejscie.</p>
+                            </div>
+                            <div class="help-feature">
+                                <span class="status-pill sell">Ryzykowny</span>
+                                <p>Max 20 wejsc dziennie, 15 pozycji, 25% eksploracji. Wiecej probok = wiecej nauki, ale wieksze ryzyko.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Polskie prawo -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Kryptowaluty a polskie prawo</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+
+                        <h4>Podatek od zyskow (PIT)</h4>
+                        <ul class="help-list">
+                            <li>Zyski z kryptowalut podlegaja opodatkowaniu stawka <strong>19% PIT</strong> (art. 30b ustawy o PIT).</li>
+                            <li>Podatek rozliczasz <strong>raz w roku</strong> w zeznaniu PIT-38, termin: 30 kwietnia nastepnego roku.</li>
+                            <li>Przychod powstaje w momencie <strong>zamiany krypto na walute fiat</strong> (np. sprzedaz BTC za PLN) lub <strong>zamiany krypto na krypto</strong>.</li>
+                            <li>Kosztem uzyskania przychodu jest cena zakupu krypto (prowizje Binance tez mozna odliczyc).</li>
+                            <li>Strate mozna rozliczyc w ciagu <strong>5 nastepnych lat podatkowych</strong>.</li>
+                        </ul>
+
+                        <h4>Obowiazki ewidencyjne</h4>
+                        <ul class="help-list">
+                            <li>Musisz prowadzic <strong>ewidencje transakcji</strong> — daty, kwoty, kursy, prowizje.</li>
+                            <li>Agent Krypto zapisuje historie transakcji, ale zalecamy eksport i archiwizacje na wlasna reke.</li>
+                            <li>Binance udostepnia historie transakcji do pobrania (CSV) — przechowuj ja min. 5 lat.</li>
+                        </ul>
+
+                        <h4>AML / KYC (przeciwdzialanie praniu pieniedzy)</h4>
+                        <ul class="help-list">
+                            <li>Binance dziala w Polsce jako zarejestrowany VASP (dostawca uslug w zakresie aktywow wirtualnych) w rejestrze GIIF.</li>
+                            <li>Weryfikacja tozsamosci (KYC) na Binance jest <strong>obowiazkowa</strong> — bez niej nie dokonasz transakcji.</li>
+                            <li>Transakcje powyzej <strong>15 000 EUR</strong> (rownowartosc) moga zostac zgloszone do GIIF.</li>
+                        </ul>
+
+                        <h4>Regulacje gieldowe</h4>
+                        <ul class="help-list">
+                            <li>Kryptowaluty <strong>nie sa</strong> w Polsce uznawane za instrumenty finansowe ani za prawny srodek platniczy.</li>
+                            <li>KNF nie nadzoruje rynku kryptowalut, ale ostrzega przed ryzykiem — inwestujesz na wlasna odpowiedzialnosc.</li>
+                            <li>Od 2024 r. w UE obowiazuje rozporzadzenie <strong>MiCA</strong> (Markets in Crypto-Assets), ktore wprowadza licencjonowanie platform krypto.</li>
+                        </ul>
+
+                        <h4>Agent Krypto a prawo</h4>
+                        <ul class="help-list">
+                            <li>Agent Krypto <strong>nie jest doradca inwestycyjnym</strong> i nie udziela porad inwestycyjnych w rozumieniu ustawy.</li>
+                            <li>Wszystkie decyzje tradingowe podejmujesz <strong>na wlasna odpowiedzialnosc</strong>.</li>
+                            <li>Agent to narzedzie edukacyjne i analityczne — korzystaj z niego swiadomie.</li>
+                            <li>Uzywanie botow tradingowych (API Binance) jest <strong>legalne</strong> w Polsce i dozwolone przez regulamin Binance.</li>
+                        </ul>
+
+                        <div class="help-warning">
+                            <strong>⚠ Wazne zastrzezenie</strong>
+                            <p>Powyzsze informacje maja charakter ogolny i nie stanowia porady prawnej ani podatkowej. W razie watpliwosci skonsultuj sie z doradca podatkowym lub prawnikiem.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FAQ -->
+                <div class="card help-card">
+                    <div class="card-header collapsible">
+                        <h3>Najczesciej zadawane pytania (FAQ)</h3>
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="card-body">
+                        <div class="help-faq">
+                            <details>
+                                <summary>Czy moge stracic pieniadze?</summary>
+                                <p>Tak. Handel kryptowalutami wiaze sie z wysokim ryzykiem. Agent nie gwarantuje zyskow. W trybie PAPER ryzykujesz tylko wirtualny kapital.</p>
+                            </details>
+                            <details>
+                                <summary>Jaki minimalny kapital potrzebuje na Binance?</summary>
+                                <p>Minimalna wartosc zlecenia na Binance Polska to <strong>25 PLN</strong>. Zalecamy min. 100–200 PLN na start.</p>
+                            </details>
+                            <details>
+                                <summary>Czy agent moze wyplacic moje pieniadze?</summary>
+                                <p><strong>Nie.</strong> Klucz API nie powinien miec uprawnien do wyplat. Agent moze tylko kupowac i sprzedawac na rynku Spot.</p>
+                            </details>
+                            <details>
+                                <summary>Ile kosztuje AI Advisor?</summary>
+                                <p>AI Advisor korzysta z OpenAI API. Koszt zalezy od modelu — aktualnie GPT-4.1 nano, ok. 0.001–0.01 USD za zapytanie. Zuzycie widoczne w zakladce Status.</p>
+                            </details>
+                            <details>
+                                <summary>Czy moge uzywac agenta na telefonie?</summary>
+                                <p>Tak! Agent Krypto to aplikacja webowa (PWA) — dziala w przegladarce na kazdym urzadzeniu. Na iPhonie mozesz dodac ja do ekranu glownego.</p>
+                            </details>
+                            <details>
+                                <summary>Jak wylaczyc automatyczny handel?</summary>
+                                <p>Kliknij "Zatrzymaj scheduler" w gornym pasku. Agent przestanie automatycznie analizowac rynek i handlowac.</p>
+                            </details>
+                            <details>
+                                <summary>Czy moje klucze API sa bezpieczne?</summary>
+                                <p>Klucze sa szyfrowane na serwerze. Zawsze ograniczaj klucz API do IP serwera (77.79.248.3) i nie wlaczaj uprawnien do wyplat.</p>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
         
     </main>
 
@@ -593,6 +871,10 @@
             <button class="mobile-nav-item" data-view="ai">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4"/></svg>
                 <span>AI</span>
+            </button>
+            <button class="mobile-nav-item" data-view="help">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span>Pomoc</span>
             </button>
         </div>
     </nav>
