@@ -455,6 +455,14 @@
                             <div id="trade-list" class="stack-list compact"></div>
                         </div>
                     </div>
+                    <div class="card full-width-card">
+                        <div class="card-header">
+                            <h3>Historia LIVE</h3>
+                        </div>
+                        <div class="card-body scrollable">
+                            <div id="live-order-list" class="stack-list compact"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -552,6 +560,40 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Alokacja LIVE -->
+                    <div class="card live-alloc-card">
+                        <div class="card-header">
+                            <h3>Alokacja LIVE</h3>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-text">Ile agent może użyć przy każdym zleceniu na Binance:</p>
+                            <div class="alloc-options">
+                                <label class="radio-label">
+                                    <input type="radio" name="alloc-mode" value="percent" checked>
+                                    <span>Procent portfela</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="alloc-mode" value="fixed">
+                                    <span>Dokładna kwota</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="alloc-mode" value="max">
+                                    <span>Maksimum (cały balans)</span>
+                                </label>
+                            </div>
+                            <div id="alloc-value-row" class="form-row alloc-value-row">
+                                <div class="form-group">
+                                    <label for="alloc-value-input" id="alloc-value-label">Procent (%)</label>
+                                    <input type="number" id="alloc-value-input" min="1" max="100" step="1" value="10" class="small-input">
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" id="save-alloc-btn" class="btn-primary">Zapisz alokację</button>
+                                <span id="alloc-status" class="alloc-status"></span>
+                            </div>
+                        </div>
+                    </div>
                     
                     <div class="card">
                         <div class="card-header">
@@ -643,50 +685,185 @@
                 <!-- Jak podlaczyc Binance API -->
                 <div class="card help-card">
                     <div class="card-header collapsible">
-                        <h3>Jak podlaczyc konto Binance?</h3>
+                        <h3>Jak podlaczyc konto Binance? (krok po kroku)</h3>
                         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
                     </div>
                     <div class="card-body">
+
+                        <h4>A. Zalozenie konta na Binance (jesli jeszcze nie masz)</h4>
                         <div class="help-steps">
                             <div class="help-step">
                                 <span class="step-number">1</span>
                                 <div>
-                                    <strong>Zaloguj sie na <a href="https://www.binance.com" target="_blank" rel="noopener">binance.com</a></strong>
-                                    <p>Przejdz do: Profil → Zarzadzanie API → Utworz klucz API.</p>
+                                    <strong>Wejdz na <a href="https://www.binance.com/pl/register" target="_blank" rel="noopener">binance.com/pl/register</a></strong>
+                                    <p>Jesli jestes w Polsce, zostaniesz przekierowany na Binance Polska. Podaj email i hasło.</p>
                                 </div>
                             </div>
                             <div class="help-step">
                                 <span class="step-number">2</span>
                                 <div>
-                                    <strong>Ustaw uprawnienia klucza</strong>
-                                    <p>Wlacz: <code>Odczyt</code> + <code>Spot Trading</code>. <strong>NIE wlaczaj</strong> wypłat (Withdrawals) — dla bezpieczenstwa.</p>
+                                    <strong>Weryfikacja tozsamosci (KYC)</strong>
+                                    <p>Binance wymaga weryfikacji — przygotuj dowod tozsamosci (dowod osobisty lub paszport). Proces trwa 5–15 minut.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">3</span>
+                                <div>
+                                    <strong>Wplac srodki</strong>
+                                    <p>Kliknij <strong>"Wplac"</strong> → wybierz <strong>PLN</strong> → przelew BLIK lub bankowy. Minimum to ok. 10 PLN, ale zalecamy min. <strong>100–200 PLN</strong> na start.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h4>B. Utworzenie klucza API na Binance</h4>
+                        <div class="help-steps">
+                            <div class="help-step">
+                                <span class="step-number">1</span>
+                                <div>
+                                    <strong>Zaloguj sie na <a href="https://www.binance.com" target="_blank" rel="noopener">binance.com</a></strong>
+                                    <p>Na komputerze (na telefonie tez mozliwe, ale latwiej na duzym ekranie).</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">2</span>
+                                <div>
+                                    <strong>Przejdz do Zarzadzania API</strong>
+                                    <p>Kliknij <strong>ikone profilu</strong> (prawy gorny rog) → <strong>"Zarzadzanie API"</strong> (lub wejdz bezposrednio na <a href="https://www.binance.com/pl/my/settings/api-management" target="_blank" rel="noopener">binance.com/pl/my/settings/api-management</a>).</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">3</span>
+                                <div>
+                                    <strong>Kliknij "Utworz klucz API"</strong>
+                                    <p>Wybierz typ: <strong>"Klucz API wygenerowany przez system"</strong> (nie RSA / Ed25519). Nadaj nazwe np. <code>AgentKrypto</code>.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">4</span>
+                                <div>
+                                    <strong>Potwierdz weryfikacje</strong>
+                                    <p>Binance poprosi o kod z email + ewentualnie 2FA (Google Authenticator / SMS).</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">5</span>
+                                <div>
+                                    <strong>WAŻNE — Skopiuj Secret Key natychmiast!</strong>
+                                    <p>Po utworzeniu zobaczysz <strong>API Key</strong> i <strong>Secret Key</strong>. Secret Key <strong>wyswietla sie tylko raz</strong> — skopiuj go i zachowaj w bezpiecznym miejscu.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h4>C. Konfiguracja uprawnien i IP klucza</h4>
+                        <div class="help-steps">
+                            <div class="help-step">
+                                <span class="step-number">1</span>
+                                <div>
+                                    <strong>Kliknij "Edytuj ograniczenia"</strong>
+                                    <p>Przy nowo utworzonym kluczu API kliknij <strong>"Edytuj ograniczenia"</strong>.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">2</span>
+                                <div>
+                                    <strong>Wlacz uprawnienia</strong>
+                                    <p>Zaznacz: ✅ <strong>Wlacz odczyt</strong> (Enable Reading) + ✅ <strong>Wlacz handel Spot</strong> (Enable Spot Trading).</p>
+                                    <p>❌ <strong>NIE zaznaczaj</strong>: Wypłaty / Withdrawals / Futures / Margin — dla bezpieczenstwa.</p>
                                 </div>
                             </div>
                             <div class="help-step">
                                 <span class="step-number">3</span>
                                 <div>
                                     <strong>Ogranicz dostep po IP</strong>
-                                    <p>Dodaj IP serwera Agent Krypto: <code>77.79.248.3</code> — to gwarantuje, ze nikt inny nie uzyje Twojego klucza.</p>
+                                    <p>Wybierz <strong>"Ogranicz dostep tylko do zaufanych adresow IP"</strong> i wpisz:</p>
+                                    <p class="help-code-block"><code>77.79.248.3</code></p>
+                                    <p>To IP serwera Agent Krypto. Dzieki temu nikt inny nie bedzie mogl uzyc Twojego klucza nawet jesli go pozna.</p>
                                 </div>
                             </div>
                             <div class="help-step">
                                 <span class="step-number">4</span>
                                 <div>
-                                    <strong>Wklej klucze w Agent Krypto</strong>
-                                    <p>Kliknij ikone <strong>uzytkownika</strong> (prawy gorny rog) → <strong>KASA I API</strong> → wklej API Key i Secret → <strong>Zapisz</strong>.</p>
+                                    <strong>Zapisz zmiany</strong>
+                                    <p>Kliknij <strong>"Zapisz"</strong> i potwierdz kodem weryfikacyjnym.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h4>D. Wklejenie kluczy w Agent Krypto</h4>
+                        <div class="help-steps">
+                            <div class="help-step">
+                                <span class="step-number">1</span>
+                                <div>
+                                    <strong>Zaloguj sie do Agent Krypto</strong>
+                                    <p>Wejdz na <a href="https://agentkrypto.apka.org.pl" target="_blank" rel="noopener">agentkrypto.apka.org.pl</a> i zaloguj się (lub zarejestruj nowe konto).</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">2</span>
+                                <div>
+                                    <strong>Otworz ustawienia API</strong>
+                                    <p>Kliknij <strong>ikone uzytkownika</strong> 👤 (prawy gorny rog) → z menu wybierz <strong>"KASA I API"</strong>.</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">3</span>
+                                <div>
+                                    <strong>Kliknij "+ Dodaj klucz"</strong>
+                                    <p>Pojawi sie formularz. Wypelnij pola:</p>
+                                    <ul class="help-list">
+                                        <li><strong>API Key</strong> — wklej caly klucz z Binance (np. <code>aB3xY7k...</code>)</li>
+                                        <li><strong>Secret Key</strong> — wklej secret (ten ktory wyswietlil sie tylko raz)</li>
+                                        <li><strong>Uprawnienia</strong> — wybierz <strong>"Trading"</strong></li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">4</span>
+                                <div>
+                                    <strong>Kliknij "Zapisz"</strong>
+                                    <p>Agent automatycznie sprawdzi polaczenie z Binance. Jesli klucz jest poprawny i ma uprawnienia do handlu, zobaczysz zielony status.</p>
                                 </div>
                             </div>
                             <div class="help-step">
                                 <span class="step-number">5</span>
                                 <div>
-                                    <strong>Gotowe!</strong>
-                                    <p>Dashboard przelacza sie automatycznie na tryb LIVE. Zobaczysz swoje realne saldo i kryptowaluty.</p>
+                                    <strong>Przelacz na tryb LIVE</strong>
+                                    <p>W menu uzytkownika 👤 kliknij <strong>"LIVE"</strong>. Dashboard pokaże Twoje realne saldo z Binance.</p>
                                 </div>
                             </div>
                         </div>
+
+                        <h4>E. Ustawienie alokacji (ile agent moze handlowac)</h4>
+                        <div class="help-steps">
+                            <div class="help-step">
+                                <span class="step-number">1</span>
+                                <div>
+                                    <strong>Przejdz do zakladki "Ustawienia"</strong>
+                                    <p>Kliknij ikone ⚙ w bocznym menu (lub "Ustawienia" na mobilce).</p>
+                                </div>
+                            </div>
+                            <div class="help-step">
+                                <span class="step-number">2</span>
+                                <div>
+                                    <strong>Ustaw alokacje LIVE</strong>
+                                    <p>W karcie <strong>"Alokacja LIVE"</strong> wybierz ile agent moze uzywac przy kazdym zleceniu:</p>
+                                    <ul class="help-list">
+                                        <li><strong>Procent portfela</strong> — np. 10% wolnych srodkow (domyslnie)</li>
+                                        <li><strong>Dokladna kwota</strong> — np. 50 PLN na kazde zlecenie</li>
+                                        <li><strong>Maksimum</strong> — agent uzyje caly dostepny balans (ostroznie!)</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="help-warning">
                             <strong>⚠ Bezpieczenstwo kluczy API</strong>
-                            <p>Klucze sa szyfrowane po stronie serwera (XOR + base64). Nigdy nie wlaczaj uprawnien do wyplat. Zawsze ograniczaj klucz do jednego IP.</p>
+                            <ul class="help-list">
+                                <li>Klucze sa szyfrowane po stronie serwera (XOR + base64).</li>
+                                <li><strong>Nigdy</strong> nie wlaczaj uprawnien do wyplat (Withdrawals).</li>
+                                <li><strong>Zawsze</strong> ograniczaj klucz do IP: <code>77.79.248.3</code>.</li>
+                                <li>Mozesz usunac klucz z Agent Krypto i z Binance w kazdej chwili.</li>
+                            </ul>
                         </div>
                     </div>
                 </div>

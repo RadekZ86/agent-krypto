@@ -180,14 +180,16 @@ KNOWLEDGE_BASE = [
 
 
 class LearningCenter:
-    PRIVATE_LEARNING_TTL = 60       # seconds
-    TRADE_RANKING_TTL = 300         # seconds
+    PRIVATE_LEARNING_TTL = 300      # seconds (5 min)
+    TRADE_RANKING_TTL = 900         # seconds (15 min)
+    MARKET_SUMMARY_TTL = 120        # seconds (2 min)
 
     def __init__(self) -> None:
         self.probability_engine = ProbabilityEngine()
         self._lifecycle_cache: dict[str, tuple[datetime, dict[str, Any]]] = {}
         self._private_learning_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
         self._trade_ranking_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+        self._market_summary_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 
     def _cache_get(self, cache: dict, key: str, ttl: int):
         """Return cached value if still fresh, otherwise None sentinel."""
@@ -398,13 +400,20 @@ class LearningCenter:
         return result
 
     def build_market_summary(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
+        import time as _time
+        cached = self._cache_get(self._market_summary_cache, symbol, self.MARKET_SUMMARY_TTL)
+        if cached is not _MISS:
+            return cached
         rows = load_symbol_market_rows(session, symbol, limit=limit)
         if len(rows) < 10:
+            self._market_summary_cache[symbol] = (_time.time(), None)
             return None
 
         df = build_indicator_frame(rows)
         summary, insights = self._analyze_frame(df)
-        return {"symbol": symbol, "summary": summary, "insights": insights}
+        result = {"symbol": symbol, "summary": summary, "insights": insights}
+        self._market_summary_cache[symbol] = (_time.time(), result)
+        return result
 
     def build_chart_package(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
         rows = load_symbol_market_rows(session, symbol, limit=limit)

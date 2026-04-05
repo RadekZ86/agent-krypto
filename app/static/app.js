@@ -536,6 +536,62 @@ function initAuthUI() {
             loadBinanceBalances(e.target.value);
         });
     }
+
+    // Live allocation settings
+    const allocRadios = document.querySelectorAll('input[name="alloc-mode"]');
+    const allocValueRow = document.getElementById('alloc-value-row');
+    const allocValueInput = document.getElementById('alloc-value-input');
+    const allocValueLabel = document.getElementById('alloc-value-label');
+    const saveAllocBtn = document.getElementById('save-alloc-btn');
+    const allocStatus = document.getElementById('alloc-status');
+
+    function updateAllocUI() {
+        const mode = document.querySelector('input[name="alloc-mode"]:checked')?.value || 'percent';
+        if (mode === 'max') {
+            allocValueRow.style.display = 'none';
+        } else {
+            allocValueRow.style.display = '';
+            if (mode === 'percent') {
+                allocValueLabel.textContent = 'Procent (%)';
+                allocValueInput.min = '1';
+                allocValueInput.max = '100';
+                allocValueInput.step = '1';
+            } else {
+                allocValueLabel.textContent = 'Kwota (PLN)';
+                allocValueInput.min = '1';
+                allocValueInput.max = '999999';
+                allocValueInput.step = '1';
+            }
+        }
+    }
+
+    allocRadios.forEach(r => r.addEventListener('change', updateAllocUI));
+
+    if (saveAllocBtn) {
+        saveAllocBtn.addEventListener('click', async () => {
+            const mode = document.querySelector('input[name="alloc-mode"]:checked')?.value || 'percent';
+            const value = parseFloat(allocValueInput.value) || 10;
+            try {
+                const res = await fetch('/api/user/live-allocation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode, value }),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    allocStatus.textContent = '✓ Zapisano';
+                    allocStatus.className = 'alloc-status success';
+                } else {
+                    allocStatus.textContent = data.error || 'Błąd';
+                    allocStatus.className = 'alloc-status error';
+                }
+            } catch {
+                allocStatus.textContent = 'Błąd połączenia';
+                allocStatus.className = 'alloc-status error';
+            }
+            setTimeout(() => { allocStatus.textContent = ''; }, 3000);
+        });
+    }
 }
 
 const chartTabs = [
@@ -632,6 +688,7 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
     paintPositions(payload.wallet.positions);
     paintDecisions(payload.recent_decisions);
     paintTrades(payload.recent_trades);
+    paintLiveOrders(payload.live_orders || []);
     paintChartSelector();
     paintChartTabs();
     paintChartRangeSwitcher();
@@ -646,6 +703,7 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
     paintArticles(payload.articles);
     paintSystemStatus(payload.system_status);
     paintBacktest(payload.backtest);
+    syncAllocUI(payload.system_status);
 }
 
 function paintChartError(message) {
@@ -1399,6 +1457,35 @@ function paintTrades(trades) {
 
 function setStatus(message) {
     document.getElementById("status-line").textContent = message;
+}
+
+function paintLiveOrders(orders) {
+    const container = document.getElementById("live-order-list");
+    if (!container) return;
+    if (!orders.length) {
+        container.innerHTML = `<div class="stack-item"><div class="stack-item-meta">Brak prób LIVE.</div></div>`;
+        return;
+    }
+    const statusLabels = { ok: "OK", error: "BŁĄD", skip: "POMINIĘTO", exception: "WYJĄTEK" };
+    const statusClasses = { ok: "buy", error: "sell", skip: "hold", exception: "sell" };
+    container.innerHTML = orders.map((o) => {
+        const badge = statusClasses[o.status] || "hold";
+        const label = statusLabels[o.status] || o.status.toUpperCase();
+        const detail = o.detail ? `<br>${o.detail}` : "";
+        const alloc = o.allocation ? ` | alokacja: ${numberFormatter.format(o.allocation)}` : "";
+        const oid = o.order_id ? ` | orderId: ${o.order_id}` : "";
+        return `
+            <div class="stack-item">
+                <div class="stack-item-title">
+                    <span>${o.symbol || "—"}</span>
+                    <span class="badge ${o.action ? o.action.toLowerCase() : "hold"}">${o.action || "?"}</span>
+                    <span class="badge ${badge}">${label}</span>
+                </div>
+                <div class="stack-item-meta">
+                    ${new Date(o.created_at).toLocaleString("pl-PL")}${alloc}${oid}${detail}
+                </div>
+            </div>`;
+    }).join("");
 }
 
 async function setSelectedSymbol(symbol) {
@@ -2473,6 +2560,24 @@ function paintSystemStatus(systemStatus) {
             </div>
         </div>
     `;
+}
+
+function syncAllocUI(systemStatus) {
+    if (!systemStatus) return;
+    const mode = systemStatus.live_alloc_mode || 'percent';
+    const value = systemStatus.live_alloc_value || 10;
+    const radio = document.querySelector(`input[name="alloc-mode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
+    const input = document.getElementById('alloc-value-input');
+    if (input) input.value = value;
+    const allocValueRow = document.getElementById('alloc-value-row');
+    const allocValueLabel = document.getElementById('alloc-value-label');
+    if (allocValueRow) {
+        allocValueRow.style.display = mode === 'max' ? 'none' : '';
+    }
+    if (allocValueLabel) {
+        allocValueLabel.textContent = mode === 'percent' ? 'Procent (%)' : 'Kwota (PLN)';
+    }
 }
 
 function paintBacktest(backtest) {

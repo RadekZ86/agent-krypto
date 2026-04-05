@@ -99,8 +99,14 @@ def load_symbol_market_rows(session: Session, symbol: str, limit: int | None = N
 
 
 def load_latest_market_row(session: Session, symbol: str) -> MarketData | None:
-    rows = load_symbol_market_rows(session, symbol, limit=1)
-    return rows[-1] if rows else None
+    """Return the single most recent preferred MarketData row for *symbol*."""
+    row = session.execute(
+        select(MarketData)
+        .where(MarketData.symbol == symbol)
+        .order_by(MarketData.timestamp.desc(), MarketData.id.desc())
+        .limit(1)
+    ).scalars().first()
+    return row
 
 
 class MarketDataService:

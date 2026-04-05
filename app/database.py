@@ -48,3 +48,9 @@ def init_db() -> None:
             if "agent_mode" not in columns:
                 conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN agent_mode VARCHAR(16) DEFAULT 'normal'"))
                 conn.commit()
+            if "live_alloc_mode" not in columns:
+                conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN live_alloc_mode VARCHAR(16) DEFAULT 'percent'"))
+                conn.commit()
+            if "live_alloc_value" not in columns:
+                conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN live_alloc_value REAL DEFAULT 10.0"))
+                conn.commit()

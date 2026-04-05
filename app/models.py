@@ -22,6 +22,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     trading_mode: Mapped[str] = mapped_column(String(16), default="PAPER")  # PAPER or LIVE
     agent_mode: Mapped[str] = mapped_column(String(16), default="normal")  # cautious/normal/risky
+    live_alloc_mode: Mapped[str] = mapped_column(String(16), default="percent")  # percent / fixed / max
+    live_alloc_value: Mapped[float] = mapped_column(Float, default=10.0)  # percent %, fixed PLN, ignored for max
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     
@@ -169,3 +171,19 @@ class OpenAIUsageLog(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class LiveOrderLog(Base):
+    """Log of every LIVE order attempt (success, error, skip)."""
+    __tablename__ = "live_order_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    username: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32))
+    action: Mapped[str] = mapped_column(String(8))  # BUY / SELL
+    status: Mapped[str] = mapped_column(String(16))  # ok / error / skip / exception
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    allocation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quote_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)

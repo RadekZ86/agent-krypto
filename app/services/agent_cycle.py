@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def _mirror_to_live_users(session: Session, symbol: str, action: str, market_price: float) -> list[dict]:
     """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key.
     Auto-detects available trading pairs and adjusts allocation to user's balance."""
-    from app.models import User, UserAPIKey
+    from app.models import User, UserAPIKey, LiveOrderLog
     from app.services.auth import APIKeyService
     from app.services.binance_api import BinanceService
 
@@ -61,16 +61,26 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 if pair is None:
                     logger.info("LIVE %s: brak dostepnej pary dla %s", user.username, symbol)
                     results.append({"user": user.username, "symbol": symbol, "action": action, "status": "skip", "detail": "no pair"})
+                    session.add(LiveOrderLog(username=user.username, symbol=symbol, action=action, status="skip", detail="brak pary"))
                     continue
                 if quote_bal <= 0:
                     logger.info("LIVE %s: brak srodkow %s dla %s", user.username, quote_asset, pair)
                     results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": "no balance"})
+                    session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="skip", detail=f"brak {quote_asset}", quote_currency=quote_asset))
                     continue
 
-                # Dynamic allocation: use configured allocation or 30% of available balance, whichever is smaller
-                configured = settings.allocation_quote.get(symbol, 40.0)
-                max_from_balance = quote_bal * 0.30
-                allocation = min(configured, max_from_balance)
+                # Dynamic allocation based on user settings
+                alloc_mode = getattr(user, 'live_alloc_mode', None) or 'percent'
+                alloc_value = getattr(user, 'live_alloc_value', None)
+                if alloc_value is None:
+                    alloc_value = 10.0
+
+                if alloc_mode == 'max':
+                    allocation = quote_bal
+                elif alloc_mode == 'fixed':
+                    allocation = min(alloc_value, quote_bal)
+                else:  # percent
+                    allocation = quote_bal * (alloc_value / 100.0)
                 # Ensure minimum order value (Binance minNotional is 25 PLN / 10 USDT)
                 min_order = 25.0 if quote_asset == "PLN" else 10.0
                 if allocation < min_order:
@@ -79,6 +89,7 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     else:
                         logger.info("LIVE %s: za malo %s (%.2f) na %s", user.username, quote_asset, quote_bal, pair)
                         results.append({"user": user.username, "symbol": pair, "action": action, "status": "skip", "detail": f"low balance {quote_bal:.2f} {quote_asset}"})
+                        session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="skip", detail=f"za malo: {quote_bal:.2f} {quote_asset}", allocation=allocation, quote_currency=quote_asset))
                         continue
 
                 order = client.create_order(
@@ -115,12 +126,15 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
             if "error" in order:
                 logger.warning("LIVE %s: blad zlecenia %s %s: %s", user.username, action, pair, order["error"])
                 results.append({"user": user.username, "symbol": pair, "action": action, "status": "error", "detail": order["error"]})
+                session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="error", detail=str(order["error"])[:500]))
             else:
                 logger.info("LIVE %s: %s %s OK orderId=%s", user.username, action, pair, order.get("orderId"))
                 results.append({"user": user.username, "symbol": pair, "action": action, "status": "ok", "order_id": order.get("orderId")})
+                session.add(LiveOrderLog(username=user.username, symbol=pair, action=action, status="ok", order_id=str(order.get("orderId", "")), allocation=allocation if action == "BUY" else None))
         except Exception as exc:
             logger.exception("LIVE %s: wyjatek przy %s %s", user.username, action, symbol)
             results.append({"user": user.username, "symbol": symbol, "action": action, "status": "exception", "detail": str(exc)})
+            session.add(LiveOrderLog(username=user.username, symbol=symbol, action=action, status="exception", detail=str(exc)[:500]))
 
     return results
 

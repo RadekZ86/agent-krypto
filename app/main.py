@@ -12,7 +12,7 @@ from sqlalchemy import desc, func, select
 
 from app.config import settings
 from app.database import SessionLocal, init_db
-from app.models import Decision, FeatureSnapshot, MarketData, OpenAIUsageLog, SimulatedTrade, User
+from app.models import Decision, FeatureSnapshot, LiveOrderLog, MarketData, OpenAIUsageLog, SimulatedTrade, User
 from app.services.auth import AuthService, APIKeyService
 from app.services.binance_api import BinanceService
 from app.services.agent_cycle import AgentCycle
@@ -150,6 +150,19 @@ def startup_event() -> None:
             cycle_runner.run(session)
     if settings.scheduler_enabled:
         scheduler_service.start()
+    # Prewarm caches in a background thread so the first dashboard load is fast
+    import threading
+
+    def _prewarm() -> None:
+        import time
+        time.sleep(2)
+        try:
+            with SessionLocal() as session:
+                _build_dashboard_payload(session)
+        except Exception:
+            pass
+
+    threading.Thread(target=_prewarm, daemon=True, name="cache-prewarm").start()
 
 
 @app.on_event("shutdown")
@@ -299,14 +312,41 @@ def _build_dashboard_payload(
     usd_to_display_rate, rate_source = currency_service.get_rate(settings.quote_currency, display_currency)
     market_rows: list[dict[str, object]] = []
     chart_packages: dict[str, dict[str, object]] = {}
+
+    # --- Batch queries: load latest feature & decision per symbol in 2 queries ---
+    from sqlalchemy import and_
+    _all_symbols = list(settings.tracked_symbols)
+
+    _latest_feature_subq = (
+        select(func.max(FeatureSnapshot.id).label("max_id"))
+        .where(FeatureSnapshot.symbol.in_(_all_symbols))
+        .group_by(FeatureSnapshot.symbol)
+        .subquery()
+    )
+    _features_by_sym: dict[str, FeatureSnapshot] = {
+        f.symbol: f
+        for f in session.execute(
+            select(FeatureSnapshot).where(FeatureSnapshot.id.in_(select(_latest_feature_subq.c.max_id)))
+        ).scalars().all()
+    }
+
+    _latest_decision_subq = (
+        select(func.max(Decision.id).label("max_id"))
+        .where(Decision.symbol.in_(_all_symbols))
+        .group_by(Decision.symbol)
+        .subquery()
+    )
+    _decisions_by_sym: dict[str, Decision] = {
+        d.symbol: d
+        for d in session.execute(
+            select(Decision).where(Decision.id.in_(select(_latest_decision_subq.c.max_id)))
+        ).scalars().all()
+    }
+
     for symbol in settings.tracked_symbols:
         market = load_latest_market_row(session, symbol)
-        feature = session.execute(
-            select(FeatureSnapshot).where(FeatureSnapshot.symbol == symbol).order_by(FeatureSnapshot.timestamp.desc())
-        ).scalars().first()
-        decision = session.execute(
-            select(Decision).where(Decision.symbol == symbol).order_by(Decision.timestamp.desc())
-        ).scalars().first()
+        feature = _features_by_sym.get(symbol)
+        decision = _decisions_by_sym.get(symbol)
         market_summary = learning_center.build_market_summary(session, symbol)
 
         if market is None or feature is None or decision is None or market_summary is None:
@@ -354,6 +394,9 @@ def _build_dashboard_payload(
     recent_trades = session.execute(
         select(SimulatedTrade).order_by(desc(SimulatedTrade.opened_at)).limit(10)
     ).scalars().all()
+    live_orders = session.execute(
+        select(LiveOrderLog).order_by(desc(LiveOrderLog.created_at)).limit(50)
+    ).scalars().all()
 
     learning_payload = learning_center.build_learning_state(session, market_rows, chart_packages)
     backtest_payload = backtest_service.get_rankings(session)
@@ -367,6 +410,8 @@ def _build_dashboard_payload(
         )
     ).one()
     user_trading_mode = current_user.trading_mode if current_user and hasattr(current_user, 'trading_mode') else settings.trading_mode
+    user_alloc_mode = getattr(current_user, "live_alloc_mode", "percent") or "percent" if current_user else "percent"
+    user_alloc_value = getattr(current_user, "live_alloc_value", 10.0) or 10.0 if current_user else 10.0
     system_status = {
         "scheduler": scheduler_service.status(),
         "trading_mode": user_trading_mode,
@@ -384,6 +429,8 @@ def _build_dashboard_payload(
         "max_trades_per_day": active_profile["max_trades_per_day"],
         "max_open_positions": active_profile["max_open_positions"],
         "preferred_trade_quotes": settings.preferred_trade_quotes,
+        "live_alloc_mode": user_alloc_mode,
+        "live_alloc_value": user_alloc_value,
     }
 
     private_learning = None
@@ -453,6 +500,20 @@ def _build_dashboard_payload(
         "private_learning": private_learning,
         "trade_ranking": trade_ranking,
         "binance_wallet": binance_wallet,
+        "live_orders": [
+            {
+                "created_at": row.created_at.isoformat() + "Z",
+                "username": row.username,
+                "symbol": row.symbol,
+                "action": row.action,
+                "status": row.status,
+                "detail": row.detail,
+                "order_id": row.order_id,
+                "allocation": row.allocation,
+                "quote_currency": row.quote_currency,
+            }
+            for row in live_orders
+        ],
         "api_usage": {
             "calls": int(api_usage[0] or 0),
             "input_tokens": int(api_usage[1] or 0),
@@ -613,6 +674,30 @@ async def set_trading_mode(request: Request, user: User = Depends(require_auth))
         session.commit()
 
     return JSONResponse({"ok": True, "trading_mode": mode})
+
+
+@app.post("/api/user/live-allocation")
+async def set_live_allocation(request: Request, user: User = Depends(require_auth)) -> JSONResponse:
+    """Set how much of Binance balance the agent can use per trade."""
+    body = await request.json()
+    mode = str(body.get("mode", "percent")).lower()
+    value = float(body.get("value", 10.0))
+    if mode not in ("percent", "fixed", "max"):
+        return JSONResponse({"ok": False, "error": "Tryb musi byc: percent, fixed lub max"}, status_code=400)
+    if mode == "percent" and (value < 1 or value > 100):
+        return JSONResponse({"ok": False, "error": "Procent musi byc od 1 do 100"}, status_code=400)
+    if mode == "fixed" and value < 1:
+        return JSONResponse({"ok": False, "error": "Kwota musi byc wieksza niz 0"}, status_code=400)
+
+    with SessionLocal() as session:
+        db_user = session.get(User, user.id)
+        if db_user is None:
+            return JSONResponse({"ok": False, "error": "Nie znaleziono uzytkownika"}, status_code=404)
+        db_user.live_alloc_mode = mode
+        db_user.live_alloc_value = value
+        session.commit()
+
+    return JSONResponse({"ok": True, "live_alloc_mode": mode, "live_alloc_value": value})
 
 
 # ============== API KEY MANAGEMENT ==============
