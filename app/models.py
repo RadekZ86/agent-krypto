@@ -187,3 +187,26 @@ class LiveOrderLog(Base):
     order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     allocation: Mapped[float | None] = mapped_column(Float, nullable=True)
     quote_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+
+class AuditLog(Base):
+    """Security audit trail for sensitive operations."""
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    resource: Mapped[str] = mapped_column(String(64), default="")
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class FailedLoginAttempt(Base):
+    """Track failed login attempts for account lockout."""
+    __tablename__ = "failed_login_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

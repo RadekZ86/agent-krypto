@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Depends, Cookie
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy import desc, func, select
+from starlette.responses import Response
 
 from app.config import settings
 from app.database import SessionLocal, init_db
-from app.models import Decision, FeatureSnapshot, LiveOrderLog, MarketData, OpenAIUsageLog, SimulatedTrade, User
-from app.services.auth import AuthService, APIKeyService
+from app.models import AuditLog, Decision, FeatureSnapshot, LiveOrderLog, MarketData, OpenAIUsageLog, SimulatedTrade, User
+from app.services.auth import AuthService, APIKeyService, validate_password
 from app.services.binance_api import BinanceService
 from app.services.agent_cycle import AgentCycle
 from app.services.ai_advisor import AIAdvisor
@@ -25,8 +32,58 @@ from app.services.runtime_state import RuntimeStateService
 from app.services.scheduler import SchedulerService
 from app.services.wallet import WalletService
 
+logger = logging.getLogger(__name__)
+
+# ---- Rate limiter ----
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(title=settings.app_name)
+app.state.limiter = limiter
+
+
+# ---- CORS ----
+_allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "https://agentkrypto.apka.org.pl,https://magicparty.usermd.net").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
+    max_age=600,
+)
+
+
+# ---- Security headers middleware ----
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    if os.getenv("FORCE_HTTPS", "").lower() in ("1", "true"):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# ---- Rate-limit error handler ----
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse({"detail": "Zbyt wiele żądań. Spróbuj ponownie za chwilę."}, status_code=429)
 base_dir = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(base_dir / "templates"))
 app.mount("/static", StaticFiles(directory=str(base_dir / "static")), name="static")
@@ -53,20 +110,20 @@ binance_service = BinanceService()
 # Request models for auth
 class RegisterRequest(BaseModel):
     email: EmailStr
-    username: str
-    password: str
+    username: str = Field(..., min_length=3, max_length=32, pattern=r"^[a-zA-Z0-9_\-]+$")
+    password: str = Field(..., min_length=8, max_length=128)
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=128)
 
 class AddAPIKeyRequest(BaseModel):
-    label: str | None = None
-    exchange: str = "binance"
-    api_key: str
-    api_secret: str
+    label: str | None = Field(None, max_length=64)
+    exchange: str = Field("binance", pattern=r"^[a-z]+$")
+    api_key: str = Field(..., min_length=10, max_length=128, pattern=r"^[a-zA-Z0-9]+$")
+    api_secret: str = Field(..., min_length=10, max_length=256, pattern=r"^[a-zA-Z0-9]+$")
     is_testnet: bool = False
-    permissions: str = "read"
+    permissions: str = Field("read", pattern=r"^(read|trade)$")
 
 
 async def get_current_user(session_token: Optional[str] = Cookie(None)) -> Optional[User]:
@@ -125,6 +182,22 @@ def get_user_binance_client(session, user_id: int, key_id: int | None = None):
     )
 
 
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()[:45]
+    real_ip = request.headers.get("X-Real-IP", "")
+    if real_ip:
+        return real_ip[:45]
+    return (request.client.host if request.client else "unknown")[:45]
+
+    return selected_key, binance_service.get_client(
+        api_key=selected_key.api_key,
+        api_secret=api_secret,
+        testnet=selected_key.is_testnet,
+    )
+
+
 def run_managed_cycle() -> dict[str, object]:
     with SessionLocal() as session:
         return cycle_runner.run(session)
@@ -143,6 +216,14 @@ def no_cache_headers() -> dict[str, str]:
 @app.on_event("startup")
 def startup_event() -> None:
     init_db()
+    # Migrate XOR-encrypted API keys to Fernet
+    try:
+        with SessionLocal() as session:
+            migrated = api_key_service.re_encrypt_from_xor(session)
+            if migrated:
+                logger.info("Security: migrated %d API keys to Fernet encryption", migrated)
+    except Exception as exc:
+        logger.error("API key migration failed: %s", exc)
     with SessionLocal() as session:
         existing_market = session.execute(select(MarketData.id).limit(1)).scalar_one_or_none()
         existing_decision = session.execute(select(Decision.id).limit(1)).scalar_one_or_none()
@@ -549,45 +630,48 @@ def _build_dashboard_payload(
 # ============== AUTH ENDPOINTS ==============
 
 @app.post("/api/auth/register")
-def register(request: RegisterRequest) -> JSONResponse:
+@limiter.limit("5/minute")
+def register(request: Request, body: RegisterRequest) -> JSONResponse:
     """Register a new user account."""
+    ip = _get_client_ip(request)
     with SessionLocal() as session:
         success, message, user = auth_service.register(
             session, 
-            email=request.email, 
-            username=request.username, 
-            password=request.password
+            email=body.email, 
+            username=body.username, 
+            password=body.password,
+            ip_address=ip,
         )
         if not success or user is None:
             raise HTTPException(status_code=400, detail=message)
 
         login_success, login_message, token = auth_service.login(
             session,
-            email_or_username=request.email,
-            password=request.password,
+            email_or_username=body.email,
+            password=body.password,
+            ip_address=ip,
+            user_agent=request.headers.get("User-Agent"),
         )
         if not login_success or token is None:
             raise HTTPException(status_code=400, detail=login_message)
 
         response = JSONResponse({"success": True, "user": serialize_user(user)})
-        response.set_cookie(
-            key="session_token",
-            value=token,
-            httponly=True,
-            max_age=30 * 24 * 3600,
-            samesite="lax",
-        )
+        _set_session_cookie(response, token)
         return response
 
 
 @app.post("/api/auth/login")
-def login(request: LoginRequest) -> JSONResponse:
+@limiter.limit("5/minute")
+def login(request: Request, body: LoginRequest) -> JSONResponse:
     """Login with email and password."""
+    ip = _get_client_ip(request)
     with SessionLocal() as session:
         success, message, token = auth_service.login(
             session,
-            email_or_username=request.email,
-            password=request.password,
+            email_or_username=body.email,
+            password=body.password,
+            ip_address=ip,
+            user_agent=request.headers.get("User-Agent"),
         )
         if not success or token is None:
             raise HTTPException(status_code=401, detail=message)
@@ -597,14 +681,20 @@ def login(request: LoginRequest) -> JSONResponse:
             raise HTTPException(status_code=401, detail="Nie udalo sie odczytac sesji uzytkownika")
 
         response = JSONResponse({"success": True, "user": serialize_user(user)})
-        response.set_cookie(
-            key="session_token",
-            value=token,
-            httponly=True,
-            max_age=30 * 24 * 3600,
-            samesite="lax",
-        )
+        _set_session_cookie(response, token)
         return response
+
+
+def _set_session_cookie(response: JSONResponse, token: str) -> None:
+    _secure = os.getenv("FORCE_HTTPS", "").lower() in ("1", "true")
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        secure=_secure,
+        max_age=24 * 3600,
+        samesite="strict" if _secure else "lax",
+    )
 
 
 @app.post("/api/auth/logout")
@@ -640,6 +730,7 @@ async def set_trading_mode(request: Request, user: User = Depends(require_auth))
     if mode not in ("PAPER", "LIVE"):
         return JSONResponse({"ok": False, "error": "Tryb musi byc PAPER lub LIVE"}, status_code=400)
 
+    ip = _get_client_ip(request)
     with SessionLocal() as session:
         db_user = session.get(User, user.id)
         if db_user is None:
@@ -671,6 +762,7 @@ async def set_trading_mode(request: Request, user: User = Depends(require_auth))
                     )
 
         db_user.trading_mode = mode
+        session.add(AuditLog(user_id=user.id, action="trading_mode_changed", resource=mode, ip_address=ip))
         session.commit()
 
     return JSONResponse({"ok": True, "trading_mode": mode})
@@ -724,19 +816,22 @@ async def list_api_keys(user: User = Depends(require_auth)) -> JSONResponse:
 
 
 @app.post("/api/keys")
-async def add_api_key(request: AddAPIKeyRequest, user: User = Depends(require_auth)) -> JSONResponse:
+@limiter.limit("10/minute")
+async def add_api_key(request: Request, body: AddAPIKeyRequest, user: User = Depends(require_auth)) -> JSONResponse:
     """Add a new API key."""
+    ip = _get_client_ip(request)
     with SessionLocal() as session:
-        label = request.label or f"{request.exchange.upper()} {request.api_key[:4]}"
+        label = body.label or f"{body.exchange.upper()} {body.api_key[:4]}"
         success, message, api_key_obj = api_key_service.add_api_key(
             session,
             user_id=user.id,
             label=label,
-            exchange=request.exchange,
-            api_key=request.api_key,
-            api_secret=request.api_secret,
-            is_testnet=request.is_testnet,
-            permissions=request.permissions
+            exchange=body.exchange,
+            api_key=body.api_key,
+            api_secret=body.api_secret,
+            is_testnet=body.is_testnet,
+            permissions=body.permissions,
+            ip_address=ip,
         )
         if not success or api_key_obj is None:
             raise HTTPException(status_code=400, detail=message)
@@ -786,7 +881,8 @@ async def get_binance_account(key_id: int, user: User = Depends(require_auth)) -
 
         result = client.get_account()
         if "error" in result:
-            raise HTTPException(status_code=400, detail=result["error"])
+            logger.warning("Binance account error for user %s: %s", user.id, result["error"])
+            raise HTTPException(status_code=400, detail="Nie udało się pobrać danych konta. Sprawdź klucz API.")
         return JSONResponse(result)
 
 
@@ -802,7 +898,8 @@ async def get_binance_balances(key_id: int, user: User = Depends(require_auth)) 
 
         balances = client.get_balances()
         if balances and isinstance(balances[0], dict) and "error" in balances[0]:
-            raise HTTPException(status_code=400, detail=balances[0]["error"])
+            logger.warning("Binance balances error for user %s: %s", user.id, balances[0]["error"])
+            raise HTTPException(status_code=400, detail="Nie udało się pobrać sald. Sprawdź klucz API.")
         return JSONResponse({"balances": balances})
 
 
@@ -818,7 +915,8 @@ async def get_binance_portfolio(key_id: int, user: User = Depends(require_auth))
 
         portfolio = client.get_portfolio_value()
         if "error" in portfolio:
-            raise HTTPException(status_code=400, detail=portfolio["error"])
+            logger.warning("Binance portfolio error for user %s: %s", user.id, portfolio["error"])
+            raise HTTPException(status_code=400, detail="Nie udało się pobrać portfela. Sprawdź klucz API.")
 
         return JSONResponse({
             "total_value_usdt": portfolio["total_value"],
