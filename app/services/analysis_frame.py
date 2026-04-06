@@ -58,4 +58,16 @@ def build_indicator_frame(rows: list[object]) -> pd.DataFrame:
         np.where(df["ema_gap_pct"] < -0.15, "DOWN", "SIDEWAYS"),
     )
 
+    # ── Bollinger Bands (20-period SMA ± 2 std dev) ──
+    df["sma20"] = df["close"].rolling(window=20, min_periods=10).mean()
+    rolling_std = df["close"].rolling(window=20, min_periods=10).std(ddof=0)
+    df["bb_upper"] = df["sma20"] + 2 * rolling_std
+    df["bb_lower"] = df["sma20"] - 2 * rolling_std
+
+    # ── VWAP (cumulative TypicalPrice*Volume / cumulative Volume) ──
+    typical_price = (df["high"] + df["low"] + df["close"]) / 3
+    cum_tp_vol = (typical_price * df["volume"]).cumsum()
+    cum_vol = df["volume"].cumsum().replace(0, np.nan)
+    df["vwap"] = (cum_tp_vol / cum_vol).fillna(df["close"])
+
     return df.reset_index(drop=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date
 from datetime import datetime, timedelta
 from statistics import mean
@@ -8,6 +9,13 @@ from typing import Any
 import requests
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
+
+
+def _is_nan(v: object) -> bool:
+    try:
+        return math.isnan(float(v))
+    except (TypeError, ValueError):
+        return True
 
 from app.config import settings
 from app.models import Decision, LearningLog, SimulatedTrade
@@ -457,6 +465,10 @@ class LearningCenter:
                     "macd_hist": round(float(row["macd_hist"]), 4),
                     "volume": round(float(row["volume"]), 2),
                     "source": row["source"],
+                    "bb_upper": round(float(row["bb_upper"]), 4) if row.get("bb_upper") is not None and not _is_nan(row["bb_upper"]) else None,
+                    "bb_lower": round(float(row["bb_lower"]), 4) if row.get("bb_lower") is not None and not _is_nan(row["bb_lower"]) else None,
+                    "sma20": round(float(row["sma20"]), 4) if row.get("sma20") is not None and not _is_nan(row["sma20"]) else None,
+                    "vwap": round(float(row["vwap"]), 4) if row.get("vwap") is not None and not _is_nan(row["vwap"]) else None,
                 }
                 for _, row in df.iterrows()
             ],
@@ -489,6 +501,50 @@ class LearningCenter:
             f"Wolumen zmienil sie o {float(latest['volume_change']) * 100:.1f}% vs poprzednia swieca, co pomaga odroznic ruch aktywny od przypadkowego.",
         ]
 
+        # ── Fibonacci retracement levels ──
+        swing_high = float(df["high"].max())
+        swing_low = float(df["low"].min())
+        fib_range = swing_high - swing_low
+        fib_levels = None
+        if fib_range > 0:
+            fib_levels = {
+                "swing_high": round(swing_high, 4),
+                "swing_low": round(swing_low, 4),
+                "fib_236": round(swing_high - 0.236 * fib_range, 4),
+                "fib_382": round(swing_high - 0.382 * fib_range, 4),
+                "fib_500": round(swing_high - 0.500 * fib_range, 4),
+                "fib_618": round(swing_high - 0.618 * fib_range, 4),
+                "fib_786": round(swing_high - 0.786 * fib_range, 4),
+            }
+
+        # ── Bollinger Band position ──
+        bb_upper_val = float(latest["bb_upper"]) if not _is_nan(latest.get("bb_upper")) else None
+        bb_lower_val = float(latest["bb_lower"]) if not _is_nan(latest.get("bb_lower")) else None
+        vwap_val = float(latest["vwap"]) if not _is_nan(latest.get("vwap")) else None
+        cur_price = float(latest["close"])
+
+        bb_insight = ""
+        if bb_upper_val and bb_lower_val:
+            if cur_price >= bb_upper_val:
+                bb_insight = "Cena dotyka gornej Bollinger Band — potencjalnie wykupiony."
+            elif cur_price <= bb_lower_val:
+                bb_insight = "Cena dotyka dolnej Bollinger Band — potencjalnie wyprzedany."
+            else:
+                bb_pct = (cur_price - bb_lower_val) / (bb_upper_val - bb_lower_val) * 100
+                bb_insight = f"Cena jest w {bb_pct:.0f}% zakresu Bollinger Bands."
+
+        vwap_insight = ""
+        if vwap_val:
+            if cur_price > vwap_val:
+                vwap_insight = f"Cena powyzej VWAP ({vwap_val:.4f}) — sila bykow."
+            else:
+                vwap_insight = f"Cena ponizej VWAP ({vwap_val:.4f}) — presja sprzedazy."
+
+        if bb_insight:
+            insights.append(bb_insight)
+        if vwap_insight:
+            insights.append(vwap_insight)
+
         summary = {
             "current_price": round(float(latest["close"]), 4),
             "change_7d": round(price_change_7d, 2),
@@ -513,6 +569,10 @@ class LearningCenter:
             "reversal_signal": probabilities["reversal_signal"],
             "probability_explanation": probabilities["explanation"],
             "source": str(latest["source"]),
+            "fibonacci": fib_levels,
+            "bb_upper": round(bb_upper_val, 4) if bb_upper_val else None,
+            "bb_lower": round(bb_lower_val, 4) if bb_lower_val else None,
+            "vwap": round(vwap_val, 4) if vwap_val else None,
         }
         return summary, insights
 

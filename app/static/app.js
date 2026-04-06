@@ -1718,6 +1718,10 @@ function paintLwChart(container, summary, insights, dataSource, chartPackage, is
             macd: p.macd != null ? Number(p.macd) : null,
             macd_signal: p.macd_signal != null ? Number(p.macd_signal) : null,
             macd_hist: p.macd_hist != null ? Number(p.macd_hist) : null,
+            bb_upper: p.bb_upper != null ? Number(p.bb_upper) : null,
+            bb_lower: p.bb_lower != null ? Number(p.bb_lower) : null,
+            sma20: p.sma20 != null ? Number(p.sma20) : null,
+            vwap: p.vwap != null ? Number(p.vwap) : null,
         };
     }).sort((a, b) => a.time - b.time);
 
@@ -1833,6 +1837,70 @@ function paintLwChart(container, summary, insights, dataSource, chartPackage, is
                 });
                 lwEma50Series.setData(ema50Data);
             }
+
+            // ── Bollinger Bands (shaded area) ──
+            const bbUpperData = uniqueSeries.filter(p => p.bb_upper != null).map(p => ({ time: p.time, value: p.bb_upper }));
+            const bbLowerData = uniqueSeries.filter(p => p.bb_lower != null).map(p => ({ time: p.time, value: p.bb_lower }));
+
+            if (bbUpperData.length > 0) {
+                const bbUpperLine = lwChart.addLineSeries({
+                    color: 'rgba(156,39,176,0.5)',
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    title: 'BB↑',
+                });
+                bbUpperLine.setData(bbUpperData);
+            }
+            if (bbLowerData.length > 0) {
+                const bbLowerLine = lwChart.addLineSeries({
+                    color: 'rgba(156,39,176,0.5)',
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    title: 'BB↓',
+                });
+                bbLowerLine.setData(bbLowerData);
+            }
+
+            // ── VWAP line ──
+            const vwapData = uniqueSeries.filter(p => p.vwap != null).map(p => ({ time: p.time, value: p.vwap }));
+            if (vwapData.length > 0) {
+                const vwapLine = lwChart.addLineSeries({
+                    color: '#ffeb3b',
+                    lineWidth: 2,
+                    lineStyle: 0,
+                    crosshairMarkerVisible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    title: 'VWAP',
+                });
+                vwapLine.setData(vwapData);
+            }
+        }
+
+        // ── Fibonacci retracement levels ──
+        if (chartPackage?.summary?.fibonacci && lwCandleSeries) {
+            const fib = chartPackage.summary.fibonacci;
+            const fibLevels = [
+                { price: fib.fib_236, label: 'Fib 23.6%', color: 'rgba(0,188,212,0.4)' },
+                { price: fib.fib_382, label: 'Fib 38.2%', color: 'rgba(0,188,212,0.5)' },
+                { price: fib.fib_500, label: 'Fib 50%', color: 'rgba(0,188,212,0.6)' },
+                { price: fib.fib_618, label: 'Fib 61.8%', color: 'rgba(0,188,212,0.7)' },
+                { price: fib.fib_786, label: 'Fib 78.6%', color: 'rgba(0,188,212,0.5)' },
+            ];
+            for (const fl of fibLevels) {
+                if (fl.price) {
+                    lwCandleSeries.createPriceLine({
+                        price: fl.price, color: fl.color, lineWidth: 1, lineStyle: 1,
+                        axisLabelVisible: false, title: fl.label,
+                    });
+                }
+            }
         }
 
         // Support/resistance price lines
@@ -1903,6 +1971,24 @@ function paintLwChart(container, summary, insights, dataSource, chartPackage, is
     }
 
     lwChart.timeScale().fitContent();
+
+    // ── Chart legend overlay ──
+    if (showOverview || showPrice) {
+        const legend = document.createElement('div');
+        legend.style.cssText = 'position:absolute;top:8px;left:8px;z-index:10;display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11px;pointer-events:none;';
+        const items = [
+            { color: '#2962ff', label: 'EMA20' },
+            { color: '#ff6d00', label: 'EMA50' },
+            { color: '#9c27b0', label: 'Bollinger' },
+            { color: '#ffeb3b', label: 'VWAP' },
+            { color: '#00bcd4', label: 'Fibonacci' },
+        ];
+        legend.innerHTML = items.map(i =>
+            `<span style="display:flex;align-items:center;gap:3px;"><span style="width:12px;height:2px;background:${i.color};display:inline-block;"></span><span style="color:#787b86;">${i.label}</span></span>`
+        ).join('');
+        container.style.position = 'relative';
+        container.appendChild(legend);
+    }
     
     // Responsive resize
     const resizeObserver = new ResizeObserver(entries => {
