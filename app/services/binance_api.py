@@ -315,23 +315,24 @@ class BinanceClient:
         return best_pair, best_quote, best_bal
 
     def get_portfolio_value(self, quote_currency: str = "USDT") -> dict:
-        """Calculate total portfolio value."""
+        """Calculate total portfolio value with multi-hop price resolution."""
         balances = self.get_balances()
         if isinstance(balances, list) and len(balances) > 0 and "error" in balances[0]:
             return balances[0]
-        
+
         prices = self.get_ticker_price()
         if "error" in prices:
             return prices
-        
+
         price_map = {p["symbol"]: float(p["price"]) for p in prices}
-        
+
         # Bridge currencies for cross-conversion when no direct pair exists
-        bridge_currencies = ["USDT", "USDC", "BTC", "BNB", "EUR"]
-        
+        bridge_currencies = ["USDC", "USDT", "BTC", "BNB", "EUR", "ETH"]
+
         total_value = 0.0
         holdings = []
-        
+        unpriced: list[str] = []
+
         for balance in balances:
             asset = balance["asset"]
             # Treat Earn wrapper tokens (LD*) as their underlying asset for pricing
@@ -339,43 +340,14 @@ class BinanceClient:
             free = float(balance["free"])
             locked = float(balance["locked"])
             total = free + locked
-            
+
             if total == 0:
                 continue
-            
-            # Calculate value in quote currency
-            value = 0.0
-            if price_asset == quote_currency:
-                value = total
-            else:
-                # Try direct pair
-                symbol = f"{price_asset}{quote_currency}"
-                if symbol in price_map:
-                    value = total * price_map[symbol]
-                else:
-                    # Try reverse pair
-                    reverse_symbol = f"{quote_currency}{price_asset}"
-                    if reverse_symbol in price_map and price_map[reverse_symbol] > 0:
-                        value = total / price_map[reverse_symbol]
-                    else:
-                        # Try bridge conversion: asset→bridge→quote
-                        for bridge in bridge_currencies:
-                            if bridge == price_asset or bridge == quote_currency:
-                                continue
-                            ab = f"{price_asset}{bridge}"
-                            bq = f"{bridge}{quote_currency}"
-                            ab_price = price_map.get(ab)
-                            bq_price = price_map.get(bq)
-                            if ab_price and bq_price:
-                                value = total * ab_price * bq_price
-                                break
-                            # Try reverse bridge: bridge→asset, quote→bridge
-                            ba = f"{bridge}{price_asset}"
-                            qb = f"{quote_currency}{bridge}"
-                            if ba in price_map and price_map[ba] > 0 and bq_price:
-                                value = total / price_map[ba] * bq_price
-                                break
-            
+
+            value = self._resolve_value(price_asset, total, quote_currency, price_map, bridge_currencies)
+            if value == 0 and total > 0:
+                unpriced.append(price_asset)
+
             total_value += value
             holdings.append({
                 "asset": asset,
@@ -384,15 +356,147 @@ class BinanceClient:
                 "total": total,
                 "value": round(value, 2)
             })
-        
+
+        # Fallback: try CoinGecko for unpriced assets
+        if unpriced:
+            cg_values = self._coingecko_fallback_prices(unpriced, quote_currency)
+            for h in holdings:
+                if h["value"] == 0 and h["total"] > 0:
+                    pa = h["asset"][2:] if h["asset"].startswith("LD") and len(h["asset"]) > 3 else h["asset"]
+                    cg_price = cg_values.get(pa, 0)
+                    if cg_price > 0:
+                        h["value"] = round(h["total"] * cg_price, 2)
+                        total_value += h["value"]
+
         # Sort by value
         holdings.sort(key=lambda x: x["value"], reverse=True)
-        
+
         return {
-            "total_value": total_value,
+            "total_value": round(total_value, 2),
             "quote_currency": quote_currency,
             "holdings": holdings
         }
+
+    def _resolve_value(self, price_asset: str, total: float, quote: str,
+                       price_map: dict[str, float], bridges: list[str]) -> float:
+        """Resolve asset value in quote currency via direct, 1-hop, or 2-hop bridge."""
+        if price_asset == quote:
+            return total
+
+        # Direct: ASSET/QUOTE
+        direct = price_map.get(f"{price_asset}{quote}")
+        if direct:
+            return total * direct
+
+        # Reverse direct: QUOTE/ASSET
+        rev = price_map.get(f"{quote}{price_asset}")
+        if rev and rev > 0:
+            return total / rev
+
+        # 1-hop bridge: ASSET→B→QUOTE (try all directions)
+        for b in bridges:
+            if b == price_asset or b == quote:
+                continue
+            val = self._try_bridge_hop(price_asset, b, quote, total, price_map)
+            if val > 0:
+                return val
+
+        # 2-hop bridge: ASSET→B1→B2→QUOTE (for Binance PL where many pairs are missing)
+        for b1 in bridges:
+            if b1 == price_asset or b1 == quote:
+                continue
+            # Get asset→b1 price
+            ab1 = self._get_pair_price(price_asset, b1, price_map)
+            if ab1 <= 0:
+                continue
+            for b2 in bridges:
+                if b2 == b1 or b2 == price_asset or b2 == quote:
+                    continue
+                b1b2 = self._get_pair_price(b1, b2, price_map)
+                if b1b2 <= 0:
+                    continue
+                b2q = self._get_pair_price(b2, quote, price_map)
+                if b2q > 0:
+                    return total * ab1 * b1b2 * b2q
+
+        return 0.0
+
+    @staticmethod
+    def _get_pair_price(base: str, quote: str, price_map: dict[str, float]) -> float:
+        """Get price of base in terms of quote, trying direct and reverse pair."""
+        p = price_map.get(f"{base}{quote}")
+        if p:
+            return p
+        rev = price_map.get(f"{quote}{base}")
+        if rev and rev > 0:
+            return 1.0 / rev
+        return 0.0
+
+    def _try_bridge_hop(self, asset: str, bridge: str, quote: str,
+                        total: float, price_map: dict[str, float]) -> float:
+        """Try ASSET→BRIDGE→QUOTE conversion in all pair directions."""
+        ab = self._get_pair_price(asset, bridge, price_map)
+        if ab <= 0:
+            return 0.0
+        bq = self._get_pair_price(bridge, quote, price_map)
+        if bq <= 0:
+            return 0.0
+        return total * ab * bq
+
+    @staticmethod
+    def _coingecko_fallback_prices(assets: list[str], quote_currency: str) -> dict[str, float]:
+        """Fetch prices from CoinGecko as last resort for unpriced assets."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Map common symbols to CoinGecko IDs
+        _SYMBOL_TO_CG = {
+            "BTC": "bitcoin", "ETH": "ethereum", "BNB": "binancecoin", "SOL": "solana",
+            "XRP": "ripple", "ADA": "cardano", "DOGE": "dogecoin", "TRX": "tron",
+            "AVAX": "avalanche-2", "DOT": "polkadot", "LINK": "chainlink", "TON": "the-open-network",
+            "SUI": "sui", "LTC": "litecoin", "BCH": "bitcoin-cash", "ATOM": "cosmos",
+            "UNI": "uniswap", "NEAR": "near", "APT": "aptos", "ETC": "ethereum-classic",
+            "XLM": "stellar", "HBAR": "hedera-hashgraph", "FIL": "filecoin", "ARB": "arbitrum",
+            "VET": "vechain", "ALGO": "algorand", "RENDER": "render-token", "FTM": "fantom",
+            "MNT": "mantle", "KAS": "kaspa", "PEPE": "pepe", "SHIB": "shiba-inu",
+            "FET": "artificial-superintelligence-alliance", "WLD": "worldcoin-wld",
+            "AAVE": "aave", "OP": "optimism", "INJ": "injective-protocol", "SEI": "sei-network",
+            "USUAL": "usual",
+        }
+
+        cg_quote = {"PLN": "pln", "USD": "usd", "USDT": "usd", "USDC": "usd", "EUR": "eur"}.get(quote_currency, "usd")
+
+        ids_to_fetch = []
+        symbol_to_id = {}
+        for sym in assets:
+            cg_id = _SYMBOL_TO_CG.get(sym)
+            if cg_id:
+                ids_to_fetch.append(cg_id)
+                symbol_to_id[cg_id] = sym
+
+        if not ids_to_fetch:
+            return {}
+
+        try:
+            resp = requests.get(
+                "https://api.coingecko.com/api/v3/simple/price",
+                params={"ids": ",".join(ids_to_fetch), "vs_currencies": cg_quote},
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                logger.warning("CoinGecko fallback failed: %s", resp.status_code)
+                return {}
+            data = resp.json()
+            result = {}
+            for cg_id, sym in symbol_to_id.items():
+                price = data.get(cg_id, {}).get(cg_quote, 0)
+                if price > 0:
+                    result[sym] = float(price)
+            logger.info("CoinGecko fallback priced %d/%d assets", len(result), len(assets))
+            return result
+        except Exception as e:
+            logger.warning("CoinGecko fallback error: %s", e)
+            return {}
 
 
 class BinanceService:
