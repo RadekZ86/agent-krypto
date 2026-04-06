@@ -37,57 +37,49 @@ jobs:
           DEPLOY_PATH: /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
         run: |
           mkdir -p ~/.ssh
+
           # Retry ssh-keyscan up to 5 times (mydevil rate-limits SSH)
           for i in 1 2 3 4 5; do
             ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null && break
             echo "ssh-keyscan attempt $i failed, retrying in 15s..."
             sleep 15
           done
-          
+
+          SSH_CMD="sshpass -p $SSH_PASSWORD ssh -T -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST}"
+          SCP_CMD="sshpass -p $SSH_PASSWORD scp -o StrictHostKeyChecking=no"
+
           # SCP with retry
           for i in 1 2 3; do
-            sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no app.zip ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/ && break
+            $SCP_CMD app.zip ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/ && break
             echo "scp attempt $i failed, retrying in 20s..."
             sleep 20
           done
-          
-          # SSH deploy with retry
-          for i in 1 2 3; do
-            sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'ENDSSH' && break
+
+          # Create remote deploy script
+          cat > /tmp/deploy_remote.sh << 'SCRIPT'
           set -e
           cd /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
-
-          # Zabezpiecz bazę danych przed nadpisaniem
-          if [ -f agent_krypto.db ]; then
-            cp agent_krypto.db agent_krypto.db.backup
-          fi
-
-          # Rozpakuj tylko kod (unzip -o nadpisuje pliki, ale bazy nie ma w zipie)
+          if [ -f agent_krypto.db ]; then cp agent_krypto.db agent_krypto.db.backup; fi
           unzip -o app.zip
           rm -f app.zip
-
-          # Przywróć bazę na wypadek gdyby coś poszło nie tak
           if [ -f agent_krypto.db.backup ] && [ ! -f agent_krypto.db ]; then
             mv agent_krypto.db.backup agent_krypto.db
           else
             rm -f agent_krypto.db.backup
           fi
-
-          # Instaluj zależności
           pip install --user -r requirements.txt --quiet 2>/dev/null
-
-          # Restart uvicorn
           pkill -f "uvicorn app.main:app" || true
           sleep 2
           cd /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
           nohup /usr/local/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
           sleep 3
-
-          # Weryfikacja
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:12345/)
           echo "Deploy completed! HTTP status: ${HTTP_CODE}"
-ENDSSH
-            if [ $? -eq 0 ]; then break; fi
+          SCRIPT
+
+          # SSH deploy with retry
+          for i in 1 2 3; do
+            $SSH_CMD < /tmp/deploy_remote.sh && break
             echo "SSH attempt $i failed, retrying in 20s..."
             sleep 20
           done
