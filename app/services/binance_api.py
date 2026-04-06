@@ -140,16 +140,28 @@ class BinanceClient:
         return self._request("GET", "/api/v3/account", signed=True)
     
     def get_balances(self) -> list[dict]:
-        """Get account balances (non-zero only)."""
+        """Get account balances (non-zero only).
+        Normalizes Earn token names (LDSHIB2→SHIB, LDBTC→BTC).
+        Merges balances when Earn + spot share the same base asset."""
         account = self.get_account()
         if "error" in account:
             return [account]
-        
+
         balances = account.get("balances", [])
-        return [
-            b for b in balances
-            if float(b.get("free", 0)) > 0 or float(b.get("locked", 0)) > 0
-        ]
+        merged: dict[str, dict] = {}
+        for b in balances:
+            free = float(b.get("free", 0))
+            locked = float(b.get("locked", 0))
+            if free <= 0 and locked <= 0:
+                continue
+            raw_asset = b["asset"]
+            clean_asset = _earn_to_base_asset(raw_asset)
+            if clean_asset in merged:
+                merged[clean_asset]["free"] += free
+                merged[clean_asset]["locked"] += locked
+            else:
+                merged[clean_asset] = {"asset": clean_asset, "free": free, "locked": locked}
+        return list(merged.values())
     
     def get_open_orders(self, symbol: Optional[str] = None) -> list:
         """Get all open orders."""
@@ -349,10 +361,7 @@ class BinanceClient:
         unpriced: list[str] = []
 
         for balance in balances:
-            asset = balance["asset"]
-            # Treat Earn wrapper tokens (LD*) as their underlying asset for pricing
-            # Handle variants like LDSHIB2 → SHIB, LDBTC → BTC, LDPEPE → PEPE
-            price_asset = _earn_to_base_asset(asset)
+            asset = balance["asset"]  # Already normalized by get_balances()
             free = float(balance["free"])
             locked = float(balance["locked"])
             total = free + locked
@@ -360,9 +369,9 @@ class BinanceClient:
             if total == 0:
                 continue
 
-            value = self._resolve_value(price_asset, total, quote_currency, price_map, bridge_currencies)
+            value = self._resolve_value(asset, total, quote_currency, price_map, bridge_currencies)
             if value == 0 and total > 0:
-                unpriced.append(price_asset)
+                unpriced.append(asset)
 
             total_value += value
             holdings.append({
@@ -375,14 +384,18 @@ class BinanceClient:
 
         # Fallback: try CoinGecko for unpriced assets
         if unpriced:
+            import logging
+            _logger = logging.getLogger(__name__)
             cg_values = self._coingecko_fallback_prices(unpriced, quote_currency)
             for h in holdings:
                 if h["value"] == 0 and h["total"] > 0:
-                    pa = h["asset"][2:] if h["asset"].startswith("LD") and len(h["asset"]) > 3 else h["asset"]
-                    cg_price = cg_values.get(pa, 0)
+                    cg_price = cg_values.get(h["asset"], 0)
                     if cg_price > 0:
                         h["value"] = round(h["total"] * cg_price, 2)
                         total_value += h["value"]
+                        _logger.info("Portfolio CoinGecko fallback: %s = %.2f %s", h["asset"], h["value"], quote_currency)
+                    else:
+                        _logger.warning("Portfolio UNPRICED: %s (total=%.6f) - no Binance pair or CoinGecko price found", h["asset"], h["total"])
 
         # Sort by value
         holdings.sort(key=lambda x: x["value"], reverse=True)
