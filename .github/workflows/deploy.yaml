@@ -37,13 +37,25 @@ jobs:
           DEPLOY_PATH: /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          # Retry ssh-keyscan up to 5 times (mydevil rate-limits SSH)
+          for i in 1 2 3 4 5; do
+            ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts 2>/dev/null && break
+            echo "ssh-keyscan attempt $i failed, retrying in 15s..."
+            sleep 15
+          done
           
-          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no app.zip ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/
+          # SCP with retry
+          for i in 1 2 3; do
+            sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no app.zip ${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/ && break
+            echo "scp attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
           
-          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << ENDSSH
+          # SSH deploy with retry
+          for i in 1 2 3; do
+            sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST} << 'ENDSSH' && break
           set -e
-          cd ${DEPLOY_PATH}
+          cd /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
 
           # Zabezpiecz bazę danych przed nadpisaniem
           if [ -f agent_krypto.db ]; then
@@ -67,11 +79,15 @@ jobs:
           # Restart uvicorn
           pkill -f "uvicorn app.main:app" || true
           sleep 2
-          cd ${DEPLOY_PATH}
-          nohup /home/MagicParty/.local/bin/uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
-          sleep 2
+          cd /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
+          nohup /usr/local/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
+          sleep 3
 
           # Weryfikacja
-          HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:12345/)
-          echo "Deploy completed! HTTP status: \${HTTP_CODE}"
-          ENDSSH
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:12345/)
+          echo "Deploy completed! HTTP status: ${HTTP_CODE}"
+ENDSSH
+            if [ $? -eq 0 ]; then break; fi
+            echo "SSH attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
