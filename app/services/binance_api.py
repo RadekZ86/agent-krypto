@@ -12,6 +12,21 @@ import requests
 
 from app.models import UserAPIKey
 
+import re
+
+# Earn wrapper tokens: strip LD prefix and trailing digits (LDSHIB2 → SHIB, LDBTC → BTC)
+_EARN_ASSET_RE = re.compile(r'^LD([A-Z]{2,}?)\d*$')
+
+
+def _earn_to_base_asset(asset: str) -> str:
+    """Convert Binance Earn wrapper asset name to the underlying base asset.
+    Examples: LDSHIB2 → SHIB, LDBTC → BTC, LDDOGE → DOGE, LDUSDC → USDC.
+    Non-Earn assets are returned as-is."""
+    m = _EARN_ASSET_RE.match(asset)
+    if m:
+        return m.group(1)
+    return asset
+
 
 class BinanceClient:
     """Binance API client for a specific user's API key."""
@@ -336,7 +351,8 @@ class BinanceClient:
         for balance in balances:
             asset = balance["asset"]
             # Treat Earn wrapper tokens (LD*) as their underlying asset for pricing
-            price_asset = asset[2:] if asset.startswith("LD") and len(asset) > 3 else asset
+            # Handle variants like LDSHIB2 → SHIB, LDBTC → BTC, LDPEPE → PEPE
+            price_asset = _earn_to_base_asset(asset)
             free = float(balance["free"])
             locked = float(balance["locked"])
             total = free + locked
