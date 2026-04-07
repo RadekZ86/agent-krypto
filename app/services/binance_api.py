@@ -267,6 +267,53 @@ class BinanceClient:
         
         return True, f"Połączono. Uprawnienia: {', '.join(perms)}"
 
+    def check_margin_available(self) -> dict:
+        """Check if margin/leverage trading is available for this account.
+        Returns status dict with available features."""
+        result = {
+            "margin_available": False,
+            "futures_available": False,
+            "leverage_available": False,
+            "reason": "",
+        }
+        # Check account permissions
+        account = self.get_account()
+        if "error" in account:
+            result["reason"] = f"Blad sprawdzania konta: {account['error']}"
+            return result
+
+        perms = account.get("permissions", [])
+        account_type = account.get("accountType", "")
+
+        # Check if margin permission set exists
+        has_margin_perm = "MARGIN" in perms
+        
+        # Try to access margin account endpoint
+        margin_account = self._request("GET", "/sapi/v1/margin/account", signed=True)
+        if isinstance(margin_account, dict) and "error" not in margin_account:
+            result["margin_available"] = True
+        
+        # Try futures — check if endpoint responds
+        futures_check = self._request("GET", "/fapi/v2/account", signed=True)
+        if isinstance(futures_check, dict) and "error" not in futures_check:
+            result["futures_available"] = True
+
+        result["leverage_available"] = result["margin_available"] or result["futures_available"]
+        
+        if not result["leverage_available"]:
+            result["reason"] = (
+                "Handel z dźwignią (margin/futures) nie jest dostępny na tym koncie. "
+                "Binance wyłączył margin i futures dla użytkowników z krajów EEA/UE (w tym Polski) "
+                "od 2023 roku ze względu na regulacje MiCA. "
+                "Dostępny jest wyłącznie handel Spot (natychmiastowy)."
+            )
+            if has_margin_perm:
+                result["reason"] += " (Konto ma flagę MARGIN ale endpoint jest zablokowany.)"
+        
+        result["account_permissions"] = perms
+        result["account_type"] = account_type
+        return result
+
     def get_tradeable_pairs(self) -> dict[str, list[str]]:
         """Return {base_asset: [quote_assets]} for pairs this account can trade.
         Cached for 1 hour."""

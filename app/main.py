@@ -328,6 +328,165 @@ def ai_insight(request: Request, symbol: str | None = None) -> JSONResponse:
     return JSONResponse(result)
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    history: list[dict] = Field(default_factory=list)
+
+
+@app.post("/api/agent-chat")
+@limiter.limit("15/minute")
+def agent_chat(request: Request, body: ChatRequest) -> JSONResponse:
+    """Interactive chat with Agent Krypto. User can ask questions and give commands."""
+    current_user = resolve_request_user(request)
+    with SessionLocal() as session:
+        dashboard_payload = _build_dashboard_payload(
+            session,
+            include_chart_package=True,
+            current_user=current_user,
+        )
+        result = ai_advisor.chat(
+            session,
+            user_message=body.message,
+            dashboard=dashboard_payload,
+            conversation_history=body.history,
+        )
+    return JSONResponse(result)
+
+
+class ChatExecuteRequest(BaseModel):
+    action: str = Field(..., pattern=r"^(BUY|SELL)$")
+    symbol: str = Field(..., min_length=2, max_length=10, pattern=r"^[A-Z]+$")
+
+
+@app.post("/api/agent-chat/execute")
+@limiter.limit("10/minute")
+async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: User = Depends(require_auth)) -> JSONResponse:
+    """Execute a trading command from chat (requires LIVE mode + auth)."""
+    with SessionLocal() as session:
+        db_user = session.get(User, user.id)
+        if db_user is None or db_user.trading_mode != "LIVE":
+            return JSONResponse({"ok": False, "error": "Musisz byc w trybie LIVE aby wykonywac zlecenia."}, status_code=400)
+
+        selected_key, client = get_user_binance_client(session, user.id)
+        if client is None:
+            return JSONResponse({"ok": False, "error": "Brak klucza API Binance."}, status_code=400)
+
+        from app.models import LiveOrderLog
+        from app.services.agent_cycle import _BRIDGE_QUOTES, _MIN_ORDER
+
+        symbol = body.symbol
+        action = body.action
+
+        if action == "BUY":
+            # Find usable quote currency
+            balances = client.get_balances()
+            tradeable = client.get_tradeable_pairs()  # {base: [quotes]}
+            available_quotes = tradeable.get(symbol, [])
+            detail = "Brak odpowiedniej pary lub srodkow"
+
+            for quote in _BRIDGE_QUOTES:
+                if quote not in available_quotes:
+                    continue
+                pair = f"{symbol}{quote}"
+                bal = next((b for b in balances if b["asset"] == quote), None)
+                if not bal:
+                    continue
+                available = bal["free"]
+                min_ord = _MIN_ORDER.get(quote, 10.0)
+                if available < min_ord:
+                    continue
+
+                # Use user allocation settings
+                alloc_mode = getattr(db_user, "live_alloc_mode", "percent") or "percent"
+                alloc_value = getattr(db_user, "live_alloc_value", 10.0) or 10.0
+                if alloc_mode == "percent":
+                    alloc = available * (alloc_value / 100.0)
+                elif alloc_mode == "fixed":
+                    alloc = min(alloc_value, available)
+                else:
+                    alloc = available
+                alloc = max(alloc, min_ord)
+                if alloc > available:
+                    continue
+
+                result = client.create_order(symbol=pair, side="BUY", order_type="MARKET", quote_quantity=round(alloc, 6))
+                if isinstance(result, dict) and "error" not in result:
+                    session.add(LiveOrderLog(
+                        username=user.username, symbol=symbol, action="BUY", status="ok",
+                        detail=f"Czat: kupiono za {round(alloc, 2)} {quote}",
+                        order_id=str(result.get("orderId", "")), allocation=round(alloc, 4), quote_currency=quote,
+                    ))
+                    session.commit()
+                    return JSONResponse({"ok": True, "detail": f"Kupiono {symbol} za {round(alloc, 2)} {quote}", "order": result})
+                else:
+                    detail = result.get("error", "Blad zlecenia") if isinstance(result, dict) else str(result)
+
+            session.add(LiveOrderLog(
+                username=user.username, symbol=symbol, action="BUY", status="error",
+                detail=f"Czat: {detail}", allocation=0, quote_currency="",
+            ))
+            session.commit()
+            return JSONResponse({"ok": False, "error": detail}, status_code=400)
+
+        elif action == "SELL":
+            balances = client.get_balances()
+            tradeable = client.get_tradeable_pairs()  # {base: [quotes]}
+            available_quotes = tradeable.get(symbol, [])
+            held = next((b for b in balances if b["asset"] == symbol), None)
+            if not held or held["free"] <= 0:
+                return JSONResponse({"ok": False, "error": f"Nie posiadasz {symbol} do sprzedazy."}, status_code=400)
+
+            qty = held["free"]
+            # Get LOT_SIZE filter from exchange info
+            exchange_info = client.get_exchange_info()
+            symbols_info = {}
+            if isinstance(exchange_info, dict) and "error" not in exchange_info:
+                symbols_info = {s["symbol"]: s for s in exchange_info.get("symbols", [])}
+
+            # Find best pair
+            for quote in _BRIDGE_QUOTES:
+                if quote not in available_quotes:
+                    continue
+                pair = f"{symbol}{quote}"
+                sym_info = symbols_info.get(pair, {})
+                filters = sym_info.get("filters", [])
+                lot_filter = next((f for f in filters if f["filterType"] == "LOT_SIZE"), None)
+                if lot_filter:
+                    step = float(lot_filter["stepSize"])
+                    if step > 0:
+                        import math
+                        qty_floored = math.floor(qty / step) * step
+                    else:
+                        qty_floored = qty
+                else:
+                    qty_floored = qty
+
+                if qty_floored <= 0:
+                    continue
+
+                result = client.create_order(symbol=pair, side="SELL", order_type="MARKET", quantity=round(qty_floored, 8))
+                if isinstance(result, dict) and "error" not in result:
+                    session.add(LiveOrderLog(
+                        username=user.username, symbol=symbol, action="SELL", status="ok",
+                        detail=f"Czat: sprzedano {round(qty_floored, 6)} {symbol}",
+                        order_id=str(result.get("orderId", "")), allocation=round(qty_floored, 6), quote_currency=quote,
+                    ))
+                    session.commit()
+                    return JSONResponse({"ok": True, "detail": f"Sprzedano {round(qty_floored, 6)} {symbol} za {quote}", "order": result})
+                else:
+                    detail = result.get("error", "Blad zlecenia") if isinstance(result, dict) else str(result)
+                    session.add(LiveOrderLog(
+                        username=user.username, symbol=symbol, action="SELL", status="error",
+                        detail=f"Czat: {detail}", allocation=0, quote_currency=quote,
+                    ))
+                    session.commit()
+                    return JSONResponse({"ok": False, "error": detail}, status_code=400)
+
+            return JSONResponse({"ok": False, "error": f"Nie znaleziono pary handlowej dla {symbol}."}, status_code=400)
+
+    return JSONResponse({"ok": False, "error": "Nieznana akcja."}, status_code=400)
+
+
 @app.post("/api/agent-mode/{mode}")
 def set_agent_mode(mode: str, request: Request) -> JSONResponse:
     current_user = resolve_request_user(request)
@@ -1141,3 +1300,17 @@ async def get_binance_portfolio(key_id: int, user: User = Depends(require_auth))
             "quote_currency": portfolio["quote_currency"],
             "holdings": portfolio["holdings"],
         })
+
+
+@app.get("/api/binance/leverage-check")
+async def check_leverage(user: User = Depends(require_auth)) -> JSONResponse:
+    """Check if margin/leverage trading is available on user's Binance account."""
+    with SessionLocal() as session:
+        _, client = get_user_binance_client(session, user.id)
+        if client is None:
+            return JSONResponse({
+                "leverage_available": False,
+                "reason": "Brak klucza API Binance. Dodaj klucz w Ustawieniach.",
+            })
+        result = client.check_margin_available()
+        return JSONResponse(result)

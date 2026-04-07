@@ -99,9 +99,9 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
                 <span>Aktywnosc</span>
             </button>
-            <button class="nav-item" data-view="ai" title="AI">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-                <span>AI</span>
+            <button class="nav-item" data-view="ai" title="Czat z Agentem">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>Czat</span>
             </button>
             <button class="nav-item" data-view="calendar" title="Kalendarz">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -474,15 +474,49 @@
         <section class="app-view" data-view="ai">
             <div class="view-content">
                 <div class="ai-layout">
-                    <div class="card ai-card">
+                    <div class="card ai-card chat-card">
                         <div class="card-header">
-                            <h3>Komentarz AI</h3>
-                            <button id="ai-refresh-button" class="small-btn">Odśwież analizę</button>
+                            <h3>Czat z Agentem</h3>
+                            <div class="chat-header-actions">
+                                <button id="ai-refresh-button" class="small-btn" title="Odśwież analizę">Analiza AI</button>
+                                <button id="chat-clear-btn" class="small-btn ghost" title="Wyczyść czat">Wyczyść</button>
+                            </div>
                         </div>
-                        <div class="card-body">
-                            <p id="ai-message" class="ai-message">
-                                Kliknij przycisk "Cykl" lub "Odśwież analizę" aby uzyskać komentarz AI.
-                            </p>
+                        <div class="card-body chat-body">
+                            <div id="chat-messages" class="chat-messages">
+                                <div class="chat-msg agent">
+                                    <div class="chat-avatar">🤖</div>
+                                    <div class="chat-bubble">
+                                        <p>Cześć! Jestem Agent Krypto. Możesz mnie zapytać o cokolwiek:</p>
+                                        <ul class="chat-suggestions-list">
+                                            <li>Dlaczego kupiłeś SHIB?</li>
+                                            <li>Jaki masz plan na portfel?</li>
+                                            <li>Sprzedaj SHIB i kup BTC</li>
+                                            <li>Co polecasz kupić?</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="chat-typing" class="chat-typing hidden">
+                                <div class="chat-avatar">🤖</div>
+                                <div class="chat-bubble typing">
+                                    <span></span><span></span><span></span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chat-input-bar">
+                            <div class="chat-quick-actions">
+                                <button class="chat-quick-btn" data-msg="Dlaczego kupiłeś SHIB?">Dlaczego SHIB?</button>
+                                <button class="chat-quick-btn" data-msg="Co polecasz kupić?">Co kupić?</button>
+                                <button class="chat-quick-btn" data-msg="Sprzedaj SHIB">Sprzedaj SHIB</button>
+                                <button class="chat-quick-btn" data-msg="Jaki masz plan?">Plan</button>
+                            </div>
+                            <form id="chat-form" class="chat-form" autocomplete="off">
+                                <input type="text" id="chat-input" class="chat-input" placeholder="Napisz do agenta... np. 'sprzedaj SHIB' lub 'dlaczego kupiłeś?'" maxlength="2000" autocomplete="off">
+                                <button type="submit" id="chat-send-btn" class="chat-send-btn" title="Wyślij">
+                                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                                </button>
+                            </form>
                         </div>
                     </div>
                     <div class="card articles-card">
@@ -1100,8 +1134,8 @@
                 <span>Portfel</span>
             </button>
             <button class="mobile-nav-item" data-view="ai">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4"/></svg>
-                <span>AI</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>Czat</span>
             </button>
             <button class="mobile-nav-item" data-view="calendar">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>

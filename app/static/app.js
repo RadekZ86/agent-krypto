@@ -2450,7 +2450,7 @@ const viewTitles = {
     charts: "Wykresy",
     portfolio: "Portfel",
     activity: "Aktywnosc",
-    ai: "AI Advisor",
+    ai: "Czat z Agentem",
     calendar: "Kalendarz",
     settings: "Status",
     help: "Pomoc"
@@ -2617,11 +2617,9 @@ document.getElementById("run-cycle-button").addEventListener("click", async () =
 });
 
 document.getElementById("ai-button").addEventListener("click", async () => {
-    try {
-        await loadAiInsight();
-    } catch (error) {
-        setStatus(error.message);
-    }
+    switchView("ai");
+    const input = document.getElementById("chat-input");
+    if (input) input.focus();
 });
 
 document.getElementById("scheduler-button").addEventListener("click", async () => {
@@ -2654,17 +2652,232 @@ document.getElementById("reset-paper-button").addEventListener("click", async ()
     }
 });
 
-// AI refresh button in AI view
+// AI refresh button in AI view — puts analysis into chat
 const aiRefreshBtn = document.getElementById("ai-refresh-button");
 if (aiRefreshBtn) {
     aiRefreshBtn.addEventListener("click", async () => {
         try {
-            await loadAiInsight();
+            await loadAiInsightToChat();
         } catch (error) {
             setStatus(error.message);
         }
     });
 }
+
+// ==================== AGENT CHAT ====================
+let chatHistory = [];
+
+function addChatMessage(role, text, isHtml) {
+    const container = document.getElementById("chat-messages");
+    if (!container) return;
+    const msgDiv = document.createElement("div");
+    msgDiv.className = `chat-msg ${role}`;
+
+    const avatar = document.createElement("div");
+    avatar.className = "chat-avatar";
+    avatar.textContent = role === "agent" ? "🤖" : "👤";
+
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    if (isHtml) {
+        bubble.innerHTML = text;
+    } else {
+        bubble.textContent = text;
+    }
+
+    msgDiv.appendChild(avatar);
+    msgDiv.appendChild(bubble);
+    container.appendChild(msgDiv);
+    container.scrollTop = container.scrollHeight;
+}
+
+function showChatTyping(show) {
+    const el = document.getElementById("chat-typing");
+    if (el) el.classList.toggle("hidden", !show);
+    if (show) {
+        const container = document.getElementById("chat-messages");
+        if (container) container.scrollTop = container.scrollHeight;
+    }
+}
+
+async function sendChatMessage(userMsg) {
+    if (!userMsg || !userMsg.trim()) return;
+    userMsg = userMsg.trim();
+
+    addChatMessage("user", userMsg);
+    chatHistory.push({ role: "user", content: userMsg });
+
+    const input = document.getElementById("chat-input");
+    if (input) { input.value = ""; input.focus(); }
+
+    showChatTyping(true);
+    setStatus("Agent myśli...");
+
+    try {
+        const resp = await fetch("/api/agent-chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: userMsg, history: chatHistory.slice(-10) }),
+        });
+        const data = await resp.json();
+        showChatTyping(false);
+
+        if (!data.enabled) {
+            addChatMessage("agent", data.reply || "Błąd: AI niedostępne.");
+            setStatus("AI niedostępne");
+            return;
+        }
+
+        const reply = data.reply || "Nie uzyskano odpowiedzi.";
+        chatHistory.push({ role: "assistant", content: reply });
+
+        // Check if there's an actionable command
+        if (data.command && data.command.action && data.command.symbol) {
+            const cmd = data.command;
+            const confirmHtml = `<p>${escapeHtml(reply)}</p>
+                <div class="chat-command-confirm">
+                    <p class="chat-cmd-label">⚡ Wykryto polecenie: <strong>${cmd.action} ${cmd.symbol}</strong></p>
+                    <button class="chat-exec-btn" data-action="${escapeHtml(cmd.action)}" data-symbol="${escapeHtml(cmd.symbol)}">
+                        Wykonaj ${cmd.action} ${cmd.symbol}
+                    </button>
+                    <button class="chat-cancel-btn">Anuluj</button>
+                </div>`;
+            addChatMessage("agent", confirmHtml, true);
+        } else {
+            addChatMessage("agent", reply);
+        }
+
+        setStatus(`Czat: odpowiedź (${data.input_tokens || 0}+${data.output_tokens || 0} tokenów)`);
+    } catch (err) {
+        showChatTyping(false);
+        addChatMessage("agent", "Błąd połączenia z serwerem. Spróbuj ponownie.");
+        setStatus("Błąd czatu");
+    }
+}
+
+async function executeChatCommand(action, symbol) {
+    addChatMessage("agent", `⏳ Wykonuję ${action} ${symbol}...`);
+    setStatus(`Wykonuję ${action} ${symbol}...`);
+
+    try {
+        const resp = await fetch("/api/agent-chat/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, symbol }),
+        });
+        const data = await resp.json();
+
+        if (data.ok) {
+            addChatMessage("agent", `✅ ${data.detail}`);
+            setStatus(`Zlecenie wykonane: ${data.detail}`);
+            // Refresh dashboard to show updated balances
+            try { await renderDashboardWithRetry(1, 0); } catch(e) {}
+        } else {
+            addChatMessage("agent", `❌ Nie udało się: ${data.error || "Nieznany błąd"}`);
+            setStatus(`Błąd zlecenia: ${data.error || ""}`);
+        }
+    } catch (err) {
+        addChatMessage("agent", "❌ Błąd połączenia z serwerem.");
+        setStatus("Błąd wykonania zlecenia");
+    }
+}
+
+async function loadAiInsightToChat() {
+    addChatMessage("user", "Daj mi analizę rynku");
+    showChatTyping(true);
+    setStatus("Generowanie analizy AI...");
+
+    try {
+        const symbolQuery = selectedSymbol ? `?symbol=${encodeURIComponent(selectedSymbol)}` : "";
+        const resp = await fetch(`/api/ai-insight${symbolQuery}`);
+        const data = await resp.json();
+        showChatTyping(false);
+
+        if (data.enabled && data.message) {
+            addChatMessage("agent", data.message);
+            chatHistory.push({ role: "assistant", content: data.message });
+            setStatus("Analiza AI gotowa");
+        } else {
+            addChatMessage("agent", data.message || "AI niedostępne.");
+            setStatus("AI nieaktywne");
+        }
+    } catch (err) {
+        showChatTyping(false);
+        addChatMessage("agent", "Błąd pobierania analizy AI.");
+        setStatus("Błąd AI");
+    }
+}
+
+function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// Chat form submit
+const chatForm = document.getElementById("chat-form");
+if (chatForm) {
+    chatForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("chat-input");
+        if (input && input.value.trim()) {
+            sendChatMessage(input.value);
+        }
+    });
+}
+
+// Quick action buttons
+document.querySelectorAll(".chat-quick-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+        const msg = btn.getAttribute("data-msg");
+        if (msg) sendChatMessage(msg);
+    });
+});
+
+// Clear chat button
+const chatClearBtn = document.getElementById("chat-clear-btn");
+if (chatClearBtn) {
+    chatClearBtn.addEventListener("click", () => {
+        chatHistory = [];
+        const container = document.getElementById("chat-messages");
+        if (container) {
+            container.innerHTML = `<div class="chat-msg agent">
+                <div class="chat-avatar">🤖</div>
+                <div class="chat-bubble">
+                    <p>Czat wyczyszczony. Jak mogę pomóc?</p>
+                </div>
+            </div>`;
+        }
+    });
+}
+
+// Delegate click for execute/cancel buttons in chat, and suggestion clicks
+document.addEventListener("click", (e) => {
+    const execBtn = e.target.closest(".chat-exec-btn");
+    if (execBtn) {
+        const action = execBtn.getAttribute("data-action");
+        const symbol = execBtn.getAttribute("data-symbol");
+        if (action && symbol) {
+            execBtn.disabled = true;
+            execBtn.textContent = "Wysyłam...";
+            executeChatCommand(action, symbol);
+        }
+        return;
+    }
+    const cancelBtn = e.target.closest(".chat-cancel-btn");
+    if (cancelBtn) {
+        const confirmBox = cancelBtn.closest(".chat-command-confirm");
+        if (confirmBox) {
+            confirmBox.innerHTML = "<em>Anulowano.</em>";
+        }
+        return;
+    }
+    // Clickable suggestion items
+    const suggestionLi = e.target.closest(".chat-suggestions-list li");
+    if (suggestionLi) {
+        sendChatMessage(suggestionLi.textContent.trim());
+    }
+});
 
 // ==================== CALENDAR ====================
 let _calYear, _calMonth, _calData = null;
