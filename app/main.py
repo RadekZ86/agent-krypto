@@ -429,6 +429,7 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
             return JSONResponse({"ok": False, "error": detail}, status_code=400)
 
         elif action == "SELL":
+            import math, time as _time
             balances = client.get_balances()
             tradeable = client.get_tradeable_pairs()  # {base: [quotes]}
             available_quotes = tradeable.get(symbol, [])
@@ -436,7 +437,30 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
             if not held or held["free"] <= 0:
                 return JSONResponse({"ok": False, "error": f"Nie posiadasz {symbol} do sprzedazy."}, status_code=400)
 
-            qty = held["free"]
+            # Check actual spot balance vs merged (Earn) balance
+            spot_free = client.get_spot_free(symbol)
+            total_free = held["free"]
+            earn_redeemed = False
+
+            if spot_free < total_free * 0.5:
+                # Most of the balance is in Earn — try to redeem
+                earn_pos = client.get_earn_flexible_position(symbol)
+                if earn_pos:
+                    product_id = earn_pos.get("productId", "")
+                    if product_id:
+                        redeem_result = client.redeem_earn_flexible(product_id, redeem_all=True)
+                        if isinstance(redeem_result, dict) and "error" not in redeem_result:
+                            earn_redeemed = True
+                            _time.sleep(2)  # Wait for redemption to settle
+                            spot_free = client.get_spot_free(symbol)
+                        else:
+                            err_msg = redeem_result.get("error", str(redeem_result)) if isinstance(redeem_result, dict) else str(redeem_result)
+                            logger.warning("Earn redeem failed for %s: %s", symbol, err_msg)
+
+            qty = spot_free
+            if qty <= 0:
+                return JSONResponse({"ok": False, "error": f"Saldo spot {symbol} = 0. Tokeny moga byc zablokowane w Earn/Staking."}, status_code=400)
+
             # Get LOT_SIZE filter from exchange info
             exchange_info = client.get_exchange_info()
             symbols_info = {}
@@ -455,9 +479,7 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
                     step = float(lot_filter["stepSize"])
                     min_qty = float(lot_filter.get("minQty", 0))
                     if step > 0:
-                        import math
                         qty_floored = math.floor(qty / step) * step
-                        # Determine decimal precision from step size
                         step_str = f"{step:.10f}".rstrip("0")
                         decimals = len(step_str.split(".")[-1]) if "." in step_str else 0
                         qty_floored = round(qty_floored, decimals)
@@ -473,9 +495,12 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
 
                 result = client.create_order(symbol=pair, side="SELL", order_type="MARKET", quantity=round(qty_floored, 8))
                 if isinstance(result, dict) and "error" not in result:
+                    detail_msg = f"Czat: sprzedano {round(qty_floored, 6)} {symbol}"
+                    if earn_redeemed:
+                        detail_msg += " (po odkupieniu z Earn)"
                     session.add(LiveOrderLog(
                         username=user.username, symbol=symbol, action="SELL", status="ok",
-                        detail=f"Czat: sprzedano {round(qty_floored, 6)} {symbol}",
+                        detail=detail_msg,
                         order_id=str(result.get("orderId", "")), allocation=round(qty_floored, 6), quote_currency=quote,
                     ))
                     session.commit()

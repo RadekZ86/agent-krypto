@@ -162,7 +162,42 @@ class BinanceClient:
             else:
                 merged[clean_asset] = {"asset": clean_asset, "free": free, "locked": locked}
         return list(merged.values())
-    
+
+    def get_spot_free(self, asset: str) -> float:
+        """Get actual spot wallet free balance for an asset (no Earn merging)."""
+        account = self.get_account()
+        if "error" in account:
+            return 0.0
+        for b in account.get("balances", []):
+            if b["asset"] == asset:
+                return float(b.get("free", 0))
+        return 0.0
+
+    def get_earn_flexible_position(self, asset: str) -> dict | None:
+        """Get Simple Earn Flexible position for an asset.
+        Returns dict with productId, totalAmount, etc., or None."""
+        resp = self._request("GET", "/sapi/v1/simple-earn/flexible/position", {"asset": asset}, signed=True)
+        if isinstance(resp, dict) and "error" in resp:
+            return None
+        rows = resp.get("rows", []) if isinstance(resp, dict) else []
+        if not rows and isinstance(resp, list):
+            rows = resp
+        for row in rows:
+            total = float(row.get("totalAmount", 0))
+            if total > 0:
+                return row
+        return None
+
+    def redeem_earn_flexible(self, product_id: str, amount: float | None = None, redeem_all: bool = False) -> dict:
+        """Redeem from Simple Earn Flexible product to Spot wallet.
+        Set redeem_all=True to redeem entire position, or specify amount."""
+        params: dict[str, Any] = {"productId": product_id, "destAccount": "SPOT"}
+        if redeem_all:
+            params["redeemAll"] = "true"
+        elif amount is not None:
+            params["amount"] = self._format_quantity(amount)
+        return self._request("POST", "/sapi/v1/simple-earn/flexible/redeem", params, signed=True)
+
     def get_open_orders(self, symbol: Optional[str] = None) -> list:
         """Get all open orders."""
         params = {}
