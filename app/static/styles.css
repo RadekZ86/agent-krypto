@@ -2024,6 +2024,15 @@ th {
     color: var(--muted);
 }
 
+/* ── Whale indicators ── */
+.whale-none { color: var(--muted); opacity: .4; }
+.whale-strong { font-size: 1.1rem; filter: drop-shadow(0 0 4px rgba(59,130,246,.6)); }
+.whale-up { color: var(--positive); }
+.whale-down { color: var(--negative); }
+.whale-vol { color: var(--accent); }
+.whale-mild { opacity: .7; }
+.whale-count { font-size: .65rem; font-weight: 700; color: var(--accent); margin-left: 1px; }
+
 .positive {
     color: #85efc6;
 }

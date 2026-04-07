@@ -70,4 +70,8 @@ def build_indicator_frame(rows: list[object]) -> pd.DataFrame:
     cum_vol = df["volume"].cumsum().replace(0, np.nan)
     df["vwap"] = (cum_tp_vol / cum_vol).fillna(df["close"])
 
+    # ── Whale / anomaly indicators ──
+    from app.services.whale_detector import compute_whale_indicators
+    df = compute_whale_indicators(df)
+
     return df.reset_index(drop=True)

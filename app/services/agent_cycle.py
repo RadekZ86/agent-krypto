@@ -380,6 +380,25 @@ class AgentCycle:
                 decision = self.decision_engine.evaluate(session, symbol, feature_row)
                 execution = self.wallet.execute_decision(session, decision, float(feature_row["close"]))
 
+                # Log whale alerts if significant
+                whale_signal = feature_row.get("whale_signal", "NONE")
+                whale_score_val = float(feature_row.get("whale_score", 0))
+                if whale_signal != "NONE" and whale_score_val >= 2.0:
+                    from app.models import WhaleAlert
+                    session.add(WhaleAlert(
+                        symbol=symbol,
+                        signal_type=whale_signal,
+                        whale_score=whale_score_val,
+                        vol_zscore=float(feature_row.get("vol_zscore", 0)),
+                        vol_ratio=float(feature_row.get("vol_ratio", 1)),
+                        price_change_pct=float(feature_row.get("price_change_pct", 0)),
+                        obv_divergence=feature_row.get("obv_divergence"),
+                        details=f"{decision.decision} conf={decision.confidence:.2f} | {decision.reason[:200]}",
+                    ))
+                    logger.info("🐋 Whale alert %s: %s score=%.1f vol_z=%.1f",
+                                symbol, whale_signal, whale_score_val,
+                                float(feature_row.get("vol_zscore", 0)))
+
                 # Mirror BUY/SELL to real Binance for LIVE users
                 if decision.decision in ("BUY", "SELL"):
                     try:
@@ -414,6 +433,8 @@ class AgentCycle:
                         "up_probability": feature_row.get("up_probability"),
                         "bottom_probability": feature_row.get("bottom_probability"),
                         "top_probability": feature_row.get("top_probability"),
+                        "whale_score": feature_row.get("whale_score", 0),
+                        "whale_signal": feature_row.get("whale_signal", "NONE"),
                     }
                 )
 

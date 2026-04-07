@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,13 @@ from app.models import FeatureSnapshot
 from app.services.analysis_frame import build_indicator_frame
 from app.services.market_data import load_symbol_market_rows
 from app.services.probability_engine import ProbabilityEngine
+
+
+def _isnan(v) -> bool:
+    try:
+        return math.isnan(float(v))
+    except (TypeError, ValueError):
+        return True
 
 
 class IndicatorService:
@@ -84,12 +93,22 @@ class IndicatorService:
             "high": float(latest["high"]),
             "low": float(latest["low"]),
             "volume": float(latest["volume"]),
+            # Whale / anomaly indicators
+            "whale_score": float(latest.get("whale_score", 0)) if not _isnan(latest.get("whale_score", 0)) else 0.0,
+            "whale_signal": str(latest.get("whale_signal", "NONE")),
+            "vol_zscore": float(latest.get("vol_zscore", 0)) if not _isnan(latest.get("vol_zscore", 0)) else 0.0,
+            "vol_ratio": float(latest.get("vol_ratio", 1)) if not _isnan(latest.get("vol_ratio", 1)) else 1.0,
+            "obv": float(latest.get("obv", 0)) if not _isnan(latest.get("obv", 0)) else 0.0,
+            "price_change_pct": float(latest.get("price_change_pct", 0)) if not _isnan(latest.get("price_change_pct", 0)) else 0.0,
+            "range_ratio": float(latest.get("range_ratio", 1)) if not _isnan(latest.get("range_ratio", 1)) else 1.0,
+            "obv_divergence": _detect_obv_div(df),
         }
 
 
-def _isnan(val) -> bool:
-    import math
+def _detect_obv_div(df) -> str:
+    """Wrapper for OBV divergence detection."""
     try:
-        return math.isnan(float(val))
-    except (TypeError, ValueError):
-        return True
+        from app.services.whale_detector import detect_obv_divergence
+        return detect_obv_divergence(df)
+    except Exception:
+        return "NONE"

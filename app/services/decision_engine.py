@@ -144,6 +144,40 @@ class DecisionEngine:
                 buy_score += 2
                 buy_signals.append(f"Odchylenie od SMA20: {price_vs_sma:.1f}% (mean reversion)")
 
+        # ── 13. WHALE / ANOMALY SIGNALS ──
+        whale_score = float(feature_row.get("whale_score", 0))
+        whale_signal = str(feature_row.get("whale_signal", "NONE"))
+        vol_zscore = float(feature_row.get("vol_zscore", 0))
+        vol_ratio_val = float(feature_row.get("vol_ratio", 1))
+        obv_divergence = str(feature_row.get("obv_divergence", "NONE"))
+
+        if whale_signal == "WHALE_BUY":
+            buy_score += 3
+            buy_signals.append(f"🐋 Wieloryb kupuje! Score={whale_score:.1f}, wolumen {vol_ratio_val:.1f}x sredniej")
+        elif whale_signal == "WHALE_ACCUMULATE":
+            buy_score += 2
+            buy_signals.append(f"🐋 Akumulacja wieloryba: duzy wolumen bez ruchu ceny (score={whale_score:.1f})")
+        elif whale_signal == "SPIKE_UP":
+            buy_score += 2
+            buy_signals.append(f"Nagly wzrost +{float(feature_row.get('price_change_pct', 0)):.1f}% przy wolumenie {vol_zscore:.1f}σ")
+        elif whale_signal == "HIGH_VOLUME":
+            buy_score += 1
+            buy_signals.append(f"Wysoki wolumen: {vol_ratio_val:.1f}x sredniej")
+
+        if whale_signal == "WHALE_SELL":
+            buy_score -= 3
+            buy_signals.append(f"🐋 UWAGA: Wieloryb sprzedaje! Score={whale_score:.1f} (kara -3)")
+        elif whale_signal == "SPIKE_DOWN":
+            buy_score -= 2
+            buy_signals.append(f"UWAGA: Nagly spadek {float(feature_row.get('price_change_pct', 0)):.1f}% (kara -2)")
+
+        if obv_divergence == "BULLISH_DIV":
+            buy_score += 2
+            buy_signals.append("OBV dywergencja bycza: smart money akumuluje mimo spadku ceny")
+        elif obv_divergence == "BEARISH_DIV":
+            buy_score -= 2
+            buy_signals.append("UWAGA: OBV dywergencja niedzwiedzia: smart money dystrybuuje (kara -2)")
+
         # ── PENALTY: Don't buy in strong downtrend without reversal signals ──
         if trend == "DOWN":
             buy_score -= 2
@@ -238,6 +272,21 @@ class DecisionEngine:
             if learning_mode and hold_hours >= float(profile["max_hold_hours"]):
                 sell_score += 3
                 sell_reasons.append(f"Rotacja po {hold_hours:.0f}h")
+
+            # 12. WHALE SELL SIGNALS
+            if whale_signal == "WHALE_SELL":
+                sell_score += 3
+                sell_reasons.append(f"🐋 Wieloryb sprzedaje! Score={whale_score:.1f} - zagrozenie spadkiem")
+            elif whale_signal == "SPIKE_DOWN":
+                sell_score += 2
+                sell_reasons.append(f"Nagly spadek {float(feature_row.get('price_change_pct', 0)):.1f}% przy duzym wolumenie")
+            if obv_divergence == "BEARISH_DIV":
+                sell_score += 2
+                sell_reasons.append("OBV dywergencja: smart money wychodzi z pozycji")
+            # Whale buy while holding = hold longer (negative sell pressure)
+            if whale_signal == "WHALE_BUY":
+                sell_score -= 2
+                sell_reasons.append(f"🐋 Wieloryb kupuje - trzymaj pozycje (bonus -2 do sell)")
 
             # Decision: require confluence for sell too
             if sell_score >= 3:

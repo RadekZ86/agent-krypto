@@ -151,6 +151,22 @@ class LearningLog(Base):
     notes: Mapped[str] = mapped_column(Text)
 
 
+class WhaleAlert(Base):
+    """Detected whale/anomaly events for later analysis."""
+    __tablename__ = "whale_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    signal_type: Mapped[str] = mapped_column(String(32))  # WHALE_BUY, SPIKE_DOWN, etc.
+    whale_score: Mapped[float] = mapped_column(Float)
+    vol_zscore: Mapped[float] = mapped_column(Float, default=0)
+    vol_ratio: Mapped[float] = mapped_column(Float, default=1)
+    price_change_pct: Mapped[float] = mapped_column(Float, default=0)
+    obv_divergence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class RuntimeSetting(Base):
     __tablename__ = "runtime_settings"
 

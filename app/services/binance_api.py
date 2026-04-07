@@ -132,7 +132,18 @@ class BinanceClient:
         if end_time:
             params["endTime"] = end_time
         return self._request("GET", "/api/v3/klines", params)
-    
+
+    def get_agg_trades(self, symbol: str, limit: int = 100,
+                       start_time: Optional[int] = None,
+                       end_time: Optional[int] = None) -> list:
+        """Get compressed/aggregate trade list (public, no auth needed)."""
+        params = {"symbol": symbol, "limit": min(limit, 1000)}
+        if start_time:
+            params["startTime"] = start_time
+        if end_time:
+            params["endTime"] = end_time
+        return self._request("GET", "/api/v3/aggTrades", params)
+
     # ==================== ACCOUNT ENDPOINTS (SIGNED) ====================
     
     def get_account(self) -> dict:

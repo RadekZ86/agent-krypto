@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -833,6 +834,26 @@ def _build_dashboard_payload(
         ).scalars().all()
     }
 
+    # --- Load recent whale alerts per symbol ---
+    from app.models import WhaleAlert
+    from datetime import timedelta
+    _whale_cutoff = datetime.utcnow() - timedelta(hours=24)
+    _recent_whale_alerts = session.execute(
+        select(WhaleAlert)
+        .where(WhaleAlert.created_at >= _whale_cutoff)
+        .order_by(desc(WhaleAlert.created_at))
+    ).scalars().all()
+    _whale_by_sym: dict[str, list] = {}
+    for wa in _recent_whale_alerts:
+        _whale_by_sym.setdefault(wa.symbol, []).append({
+            "signal_type": wa.signal_type,
+            "whale_score": round(wa.whale_score, 1),
+            "vol_zscore": round(wa.vol_zscore, 1),
+            "price_change_pct": round(wa.price_change_pct, 1),
+            "obv_divergence": wa.obv_divergence,
+            "created_at": wa.created_at.isoformat() + "Z",
+        })
+
     for symbol in settings.tracked_symbols:
         market = load_latest_market_row(session, symbol)
         feature = _features_by_sym.get(symbol)
@@ -847,6 +868,8 @@ def _build_dashboard_payload(
         display_price = float(live_quote["price"]) if live_quote is not None else float(market.close)
         display_source = str(live_quote["source"]) if live_quote is not None else market.source
         display_timestamp = str(live_quote["timestamp"]) if live_quote is not None else market.timestamp.isoformat()
+        sym_whale_alerts = _whale_by_sym.get(symbol, [])
+        latest_whale = sym_whale_alerts[0] if sym_whale_alerts else None
         market_rows.append(
             {
                 "symbol": symbol,
@@ -867,6 +890,9 @@ def _build_dashboard_payload(
                 "bottom_probability": summary.get("bottom_probability", 50.0),
                 "top_probability": summary.get("top_probability", 50.0),
                 "reversal_signal": summary.get("reversal_signal", "NEUTRAL"),
+                "whale_signal": latest_whale["signal_type"] if latest_whale else "NONE",
+                "whale_score": latest_whale["whale_score"] if latest_whale else 0,
+                "whale_alerts_24h": len(sym_whale_alerts),
             }
         )
 
@@ -958,6 +984,38 @@ def _build_dashboard_payload(
                 except Exception:
                     pass
 
+    # --- Build live_stats from LiveOrderLog + live_portfolio when LIVE ---
+    live_stats: dict[str, object] | None = None
+    if user_trading_mode == "LIVE" and current_user is not None:
+        _live_orders_all = session.execute(
+            select(LiveOrderLog).where(LiveOrderLog.username == current_user.username)
+        ).scalars().all()
+        _ok_buys = [o for o in _live_orders_all if o.status == "ok" and o.action == "BUY"]
+        _ok_sells = [o for o in _live_orders_all if o.status == "ok" and o.action == "SELL"]
+
+        # PnL from live_portfolio (real Binance holdings)
+        _stables = {"USDT", "BUSD", "FDUSD", "PLN", "EUR", "USD", "USDC"}
+        _lp = live_portfolio or []
+        _crypto_holdings = [h for h in _lp if not h.get("is_stable", False) and h.get("asset") not in _stables]
+        _gross_profit = sum(h["pnl_value"] for h in _crypto_holdings if h.get("pnl_value", 0) > 0)
+        _gross_loss = abs(sum(h["pnl_value"] for h in _crypto_holdings if h.get("pnl_value", 0) < 0))
+        _total_pnl = sum(h["pnl_value"] for h in _crypto_holdings)
+        _winning = len([h for h in _crypto_holdings if h.get("pnl_value", 0) > 0])
+        _losing = len([h for h in _crypto_holdings if h.get("pnl_value", 0) < 0])
+        _total_positions = _winning + _losing
+        _win_rate = round(_winning / _total_positions * 100, 2) if _total_positions > 0 else 0.0
+
+        live_stats = {
+            "buy_count": len(_ok_buys),
+            "sell_count": len(_ok_sells),
+            "win_rate": _win_rate,
+            "gross_profit": round(_gross_profit, 2),
+            "gross_loss": round(_gross_loss, 2),
+            "realized_pnl": round(_total_pnl, 2),
+            "winning_count": _winning,
+            "losing_count": _losing,
+        }
+
     return {
         "wallet": wallet_service.get_snapshot(session),
         "market": market_rows,
@@ -997,6 +1055,7 @@ def _build_dashboard_payload(
         "trade_ranking": trade_ranking,
         "binance_wallet": binance_wallet,
         "live_portfolio": live_portfolio,
+        "live_stats": live_stats,
         "live_orders": [
             {
                 "created_at": row.created_at.isoformat() + "Z",
