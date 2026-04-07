@@ -132,6 +132,13 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     logger.info("LIVE %s: SELL %s OK orderId=%s", user.username, pair, order.get("orderId"))
                     results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "ok", "order_id": order.get("orderId")})
                     session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="ok", order_id=str(order.get("orderId", ""))))
+                    # Log for learning
+                    try:
+                        from app.services.learning import LearningService
+                        _ls = LearningService()
+                        _ls.log_live_trade_result(session, symbol, "SELL", 0, "LIVE_SELL", f"SELL {symbol} na {pair}")
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.exception("LIVE %s: wyjatek przy %s %s", user.username, action, symbol)
             results.append({"user": user.username, "symbol": symbol, "action": action, "status": "exception", "detail": str(exc)})

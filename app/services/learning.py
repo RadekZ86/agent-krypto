@@ -22,3 +22,23 @@ class LearningService:
                 notes=notes,
             )
         )
+
+    def log_live_trade_result(
+        self,
+        session: Session,
+        symbol: str,
+        result: str,
+        profit_pct: float,
+        market_state: str,
+        notes: str,
+    ) -> None:
+        """Log a LIVE trade outcome for learning (no SimulatedTrade needed)."""
+        session.add(
+            LearningLog(
+                decision_id=None,
+                result=result,
+                was_profitable=profit_pct > 0,
+                market_state=market_state,
+                notes=f"[LIVE {symbol}] pnl={profit_pct:.2f}% | {notes}",
+            )
+        )

@@ -20,7 +20,10 @@ class DecisionEngine:
         reasons: list[str] = []
         decision_value = "HOLD"
         confidence = 0.45
-        learning_mode = settings.trading_mode == "PAPER" and settings.learning_mode
+        # Learning mode: always use profile thresholds so agent adapts from experience
+        learning_mode = settings.learning_mode
+        # Exploration trades: only in PAPER mode (too risky for real money)
+        exploration_mode = settings.trading_mode == "PAPER" and settings.learning_mode
 
         # ── Extract all indicators ──
         close = float(feature_row["close"])
@@ -251,7 +254,7 @@ class DecisionEngine:
                 decision_value = "BUY"
                 confidence = min(0.95, 0.40 + buy_score * 0.04 + max(up_probability - 50, 0) / 100)
                 reasons = buy_signals
-            elif learning_mode:
+            elif exploration_mode:
                 experiment = self._learning_experiment(symbol, feature_row, buy_score, profile)
                 if experiment is not None:
                     decision_value = "BUY"

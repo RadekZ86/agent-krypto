@@ -634,6 +634,123 @@ class BinanceClient:
             logger.warning("CoinGecko fallback error: %s", e)
             return {}
 
+    def get_portfolio_with_cost_basis(self, quote_currency: str = "PLN") -> list[dict]:
+        """Build portfolio with cost basis from Binance trade history.
+        Returns list of holdings with avg_buy_price, current_price, pnl_value, pnl_pct."""
+        import logging
+        _log = logging.getLogger(__name__)
+        portfolio = self.get_portfolio_value(quote_currency)
+        if isinstance(portfolio, dict) and "error" in portfolio:
+            return []
+
+        holdings = portfolio.get("holdings", [])
+        prices = self.get_ticker_price()
+        price_map = {p["symbol"]: float(p["price"]) for p in prices} if isinstance(prices, list) else {}
+        bridges = ["USDC", "USDT", "BTC", "BNB", "EUR", "ETH", "PLN"]
+        stables = {"USDT", "BUSD", "FDUSD", "PLN", "EUR", "USD", "USDC"}
+
+        tradeable = self.get_tradeable_pairs()
+        result = []
+
+        for h in holdings:
+            asset = h["asset"]
+            total = h["total"]
+            value = h["value"]
+            if total <= 0 or value < 0.01:
+                continue
+            if asset in stables:
+                result.append({
+                    "asset": asset, "total": total, "value": round(value, 2),
+                    "avg_buy_price": None, "current_price": None,
+                    "pnl_value": 0, "pnl_pct": 0, "is_stable": True,
+                })
+                continue
+
+            # Current price in quote_currency
+            current_price_q = self._resolve_value(asset, 1.0, quote_currency, price_map, bridges)
+
+            # Compute average buy price from trade history
+            avg_buy = self._compute_avg_cost(asset, quote_currency, tradeable, price_map, bridges, _log)
+
+            pnl_value = 0.0
+            pnl_pct = 0.0
+            if avg_buy and avg_buy > 0 and current_price_q > 0:
+                cost_basis = avg_buy * total
+                pnl_value = value - cost_basis
+                pnl_pct = (current_price_q - avg_buy) / avg_buy * 100
+
+            result.append({
+                "asset": asset,
+                "total": round(total, 8),
+                "value": round(value, 2),
+                "avg_buy_price": round(avg_buy, 6) if avg_buy else None,
+                "current_price": round(current_price_q, 6) if current_price_q else None,
+                "pnl_value": round(pnl_value, 2),
+                "pnl_pct": round(pnl_pct, 2),
+                "is_stable": False,
+            })
+
+        result.sort(key=lambda x: abs(x["value"]), reverse=True)
+        return result
+
+    def _compute_avg_cost(self, asset: str, quote_currency: str,
+                          tradeable: dict, price_map: dict,
+                          bridges: list, logger) -> float | None:
+        """Compute average cost per unit in quote_currency from Binance trade history."""
+        quotes = tradeable.get(asset, [])
+        if not quotes:
+            return None
+
+        total_qty = 0.0
+        total_cost_q = 0.0  # total cost in quote_currency
+
+        # Try each available pair
+        for q in quotes:
+            pair = f"{asset}{q}"
+            try:
+                trades = self.get_my_trades(pair, limit=100)
+            except Exception:
+                continue
+            if not isinstance(trades, list):
+                continue
+
+            # Convert trade quote to portfolio quote_currency
+            q_to_quote = 1.0 if q == quote_currency else self._get_pair_price(q, quote_currency, price_map)
+            if q_to_quote <= 0:
+                # Try bridge
+                for b in bridges:
+                    if b == q or b == quote_currency:
+                        continue
+                    qb = self._get_pair_price(q, b, price_map)
+                    bqc = self._get_pair_price(b, quote_currency, price_map)
+                    if qb > 0 and bqc > 0:
+                        q_to_quote = qb * bqc
+                        break
+            if q_to_quote <= 0:
+                continue
+
+            for t in trades:
+                is_buyer = t.get("isBuyer", False)
+                qty = float(t.get("qty", 0))
+                price_in_q = float(t.get("price", 0))
+                cost_in_q = qty * price_in_q  # cost in the pair's quote currency
+                cost_in_target = cost_in_q * q_to_quote
+
+                if is_buyer:
+                    total_qty += qty
+                    total_cost_q += cost_in_target
+                else:
+                    # SELL reduces position — use FIFO-like: reduce proportionally
+                    if total_qty > 0:
+                        avg_so_far = total_cost_q / total_qty
+                        reduce = min(qty, total_qty)
+                        total_qty -= reduce
+                        total_cost_q -= reduce * avg_so_far
+
+        if total_qty > 0:
+            return total_cost_q / total_qty
+        return None
+
 
 class BinanceService:
     """Service to manage Binance connections for multiple users."""

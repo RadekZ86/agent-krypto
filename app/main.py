@@ -926,6 +926,7 @@ def _build_dashboard_payload(
     private_learning = None
     trade_ranking = None
     binance_wallet = None
+    live_portfolio = None
     if current_user is not None:
         _, client = get_user_binance_client(session, current_user.id)
         if client is not None:
@@ -949,6 +950,11 @@ def _build_dashboard_payload(
                             if total > 0:
                                 binance_wallet = portfolio
                                 break
+                except Exception:
+                    pass
+                try:
+                    quote_for_pnl = (binance_wallet or {}).get("quote_currency", "PLN")
+                    live_portfolio = client.get_portfolio_with_cost_basis(quote_for_pnl)
                 except Exception:
                     pass
 
@@ -990,6 +996,7 @@ def _build_dashboard_payload(
         "private_learning": private_learning,
         "trade_ranking": trade_ranking,
         "binance_wallet": binance_wallet,
+        "live_portfolio": live_portfolio,
         "live_orders": [
             {
                 "created_at": row.created_at.isoformat() + "Z",

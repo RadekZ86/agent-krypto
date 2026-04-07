@@ -694,6 +694,10 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
     paintDecisions(payload.recent_decisions);
     paintTrades(payload.recent_trades);
     paintLiveOrders(payload.live_orders || []);
+    if (payload.live_portfolio && payload.live_portfolio.length) {
+        const quoteCur = payload.binance_wallet ? payload.binance_wallet.quote_currency : "PLN";
+        paintLivePortfolio(payload.live_portfolio, quoteCur);
+    }
     paintChartSelector();
     paintChartTabs();
     paintChartRangeSwitcher();
@@ -2519,12 +2523,72 @@ function switchView(viewName) {
 }
 
 function syncPortfolioView() {
-    // Copy bought coins menu to portfolio view
-    const source = document.getElementById("bought-coins-menu");
-    const target = document.getElementById("bought-coins-menu-2");
-    if (source && target) {
-        target.innerHTML = source.innerHTML;
+    // If live portfolio data exists, paintLivePortfolio handles it.
+    // Fallback: copy bought coins menu to portfolio view for PAPER mode.
+    const liveEl = document.getElementById("live-portfolio-list");
+    const paperEl = document.getElementById("bought-coins-menu-2");
+    if (liveEl && liveEl.children.length > 0) {
+        liveEl.style.display = "";
+        if (paperEl) paperEl.style.display = "none";
+        return;
     }
+    if (paperEl) {
+        paperEl.style.display = "";
+        const source = document.getElementById("bought-coins-menu");
+        if (source) paperEl.innerHTML = source.innerHTML;
+    }
+    if (liveEl) liveEl.style.display = "none";
+}
+
+function paintLivePortfolio(holdings, quoteCurrency) {
+    const container = document.getElementById("live-portfolio-list");
+    const label = document.getElementById("portfolio-total-label");
+    if (!container) return;
+    if (!holdings || !holdings.length) {
+        container.innerHTML = `<div class="empty-state">Brak danych portfela.</div>`;
+        if (label) label.textContent = "";
+        return;
+    }
+    const qc = quoteCurrency || "PLN";
+    const totalValue = holdings.reduce((s, h) => s + (h.value || 0), 0);
+    const totalPnl = holdings.filter(h => !h.is_stable).reduce((s, h) => s + (h.pnl_value || 0), 0);
+    const pnlClass = totalPnl >= 0 ? "positive" : "negative";
+    const pnlSign = totalPnl >= 0 ? "+" : "";
+    if (label) label.innerHTML = `Razem: <strong>${formatQuote(totalValue, qc)}</strong> &nbsp; <span class="${pnlClass}">${pnlSign}${formatQuote(totalPnl, qc)}</span>`;
+
+    container.innerHTML = holdings.map(h => {
+        if (h.is_stable) {
+            return `<div class="pf-row pf-stable">
+                <div class="pf-symbol">${h.asset}</div>
+                <div class="pf-value">${formatQuote(h.value, qc)}</div>
+                <div class="pf-pnl stable">stablecoin</div>
+            </div>`;
+        }
+        const cls = h.pnl_value >= 0 ? "positive" : "negative";
+        const sign = h.pnl_value >= 0 ? "+" : "";
+        const pctSign = h.pnl_pct >= 0 ? "+" : "";
+        const arrow = h.pnl_value >= 0 ? "▲" : "▼";
+        const avgBuy = h.avg_buy_price ? formatQuote(h.avg_buy_price, qc) : "—";
+        const curPrice = h.current_price ? formatQuote(h.current_price, qc) : "—";
+        return `<div class="pf-row">
+            <div class="pf-main">
+                <div class="pf-symbol">${h.asset}</div>
+                <div class="pf-qty">${numberFormatter.format(h.total)}</div>
+            </div>
+            <div class="pf-prices">
+                <span class="pf-label">Kupno:</span> <span>${avgBuy}</span>
+                <span class="pf-label">Teraz:</span> <span>${curPrice}</span>
+            </div>
+            <div class="pf-right">
+                <div class="pf-value">${formatQuote(h.value, qc)}</div>
+                <div class="pf-pnl ${cls}">
+                    <span class="pf-arrow">${arrow}</span>
+                    ${sign}${formatQuote(h.pnl_value, qc)}
+                    <span class="pf-pct">(${pctSign}${h.pnl_pct.toFixed(1)}%)</span>
+                </div>
+            </div>
+        </div>`;
+    }).join("");
 }
 
 function initViewSwitching() {

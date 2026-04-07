@@ -512,11 +512,37 @@ body.app-mode {
 
 .portfolio-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
     gap: 16px;
     flex: 1;
     min-height: 0;
 }
+.portfolio-grid > .full-width-card { grid-column: 1 / -1; }
+
+/* ── Portfolio Holdings P&L ── */
+.portfolio-holdings { display: flex; flex-direction: column; gap: 6px; }
+.pf-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-radius: 10px;
+    background: var(--surface-2, rgba(255,255,255,0.03));
+    transition: background .15s;
+}
+.pf-row:hover { background: rgba(255,255,255,0.06); }
+.pf-row.pf-stable { opacity: .6; }
+.pf-main { min-width: 90px; }
+.pf-symbol { font-weight: 700; font-size: 1rem; color: var(--text); }
+.pf-qty { font-size: .78rem; color: var(--muted); }
+.pf-prices { display: flex; gap: 8px; font-size: .78rem; color: var(--muted); flex: 1; flex-wrap: wrap; }
+.pf-prices .pf-label { opacity: .6; }
+.pf-right { text-align: right; min-width: 120px; }
+.pf-value { font-weight: 600; font-size: .92rem; }
+.pf-pnl { font-size: .82rem; font-weight: 600; margin-top: 2px; }
+.pf-pnl.positive { color: var(--positive); }
+.pf-pnl.negative { color: var(--negative); }
+.pf-pnl.stable { color: var(--muted); font-weight: 400; font-size: .75rem; }
+.pf-arrow { font-size: .7rem; }
+.pf-pct { font-weight: 400; opacity: .8; }
 
 .activity-grid {
     display: grid;
@@ -1184,6 +1210,10 @@ body.app-mode {
         grid-template-columns: 1fr;
         gap: 12px;
     }
+
+    .pf-row { flex-wrap: wrap; padding: 8px 10px; gap: 6px; }
+    .pf-prices { order: 3; width: 100%; }
+    .pf-right { margin-left: auto; }
 
     .chat-card {
         max-height: calc(100vh - 160px);
