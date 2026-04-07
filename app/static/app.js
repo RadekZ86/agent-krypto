@@ -788,7 +788,7 @@ function paintWallet(wallet, binanceWallet, liveStats) {
         document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
         document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
     }
-    paintQuickSummary(wallet, binanceWallet, ls);
+    paintQuickSummary(wallet, binanceWallet, liveStats);
     
     // Mobile hero card update
     const heroBalance = document.getElementById("mobile-hero-balance");
@@ -801,7 +801,7 @@ function paintWallet(wallet, binanceWallet, liveStats) {
         const holdings = binanceWallet.holdings || [];
         const quoteAsset = holdings.find(h => h.asset === walletQuote);
         const cashValue = quoteAsset ? quoteAsset.free : 0;
-        const pnl = ls ? (ls.realized_pnl || 0) : 0;
+        const pnl = liveStats ? (liveStats.realized_pnl || 0) : 0;
 
         if (heroBalance) {
             heroBalance.textContent = formatQuote(binanceWallet.total_value || 0, walletQuote);
@@ -818,18 +818,18 @@ function paintWallet(wallet, binanceWallet, liveStats) {
         if (heroStatDivs[2]) heroStatDivs[2].querySelector("span").textContent = "Win rate";
 
         if (heroProfit) {
-            const gp = ls ? (ls.gross_profit || 0) : 0;
+            const gp = liveStats ? (liveStats.gross_profit || 0) : 0;
             heroProfit.textContent = formatQuote(gp, walletQuote);
             heroProfit.style.color = gp > 0 ? "var(--positive)" : "";
         }
         if (heroLoss) {
-            const gl = ls ? (ls.gross_loss || 0) : 0;
+            const gl = liveStats ? (liveStats.gross_loss || 0) : 0;
             heroLoss.textContent = formatQuote(gl, walletQuote);
             heroLoss.style.color = gl > 0 ? "var(--negative)" : "";
             heroLoss.closest(".mobile-hero-stat")?.classList.remove("positive");
             heroLoss.closest(".mobile-hero-stat")?.classList.add(gl > 0 ? "negative" : "positive");
         }
-        if (heroWinrate) heroWinrate.textContent = ls ? `${percentFormatter.format(ls.win_rate || 0)}%` : "–";
+        if (heroWinrate) heroWinrate.textContent = liveStats ? `${percentFormatter.format(liveStats.win_rate || 0)}%` : "–";
     } else {
         if (heroBalance) {
             heroBalance.textContent = formatQuote(wallet.realized_profit);
