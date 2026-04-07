@@ -202,7 +202,8 @@ class BinanceClient:
         }
         
         if quantity:
-            params["quantity"] = f"{quantity:.8f}"
+            # Determine precision from quantity value to avoid Binance precision errors
+            params["quantity"] = self._format_quantity(quantity)
         if quote_quantity:
             # Floor to 2 decimals to avoid exceeding available balance
             floored = math.floor(quote_quantity * 100) / 100
@@ -215,6 +216,17 @@ class BinanceClient:
             params["stopPrice"] = f"{stop_price:.8f}"
         
         return self._request("POST", "/api/v3/order", params, signed=True)
+
+    @staticmethod
+    def _format_quantity(qty: float) -> str:
+        """Format quantity with minimal necessary decimal places.
+        Avoids 'too much precision' errors from Binance."""
+        import math
+        if qty == int(qty):
+            return str(int(qty))
+        # Find precision: count decimal places needed
+        s = f"{qty:.8f}".rstrip("0")
+        return s
     
     def create_test_order(self, **kwargs) -> dict:
         """Test new order creation (no actual order placed)."""
@@ -350,9 +362,11 @@ class BinanceClient:
         return result
 
     def find_best_pair(self, base_asset: str, balances: list[dict],
-                       preferred_quotes: list[str] | None = None) -> tuple[str | None, str | None, float]:
-        """Find the best trading pair for base_asset based on account's tradeable pairs
-        and available quote balances.
+                       preferred_quotes: list[str] | None = None,
+                       side: str = "BUY") -> tuple[str | None, str | None, float]:
+        """Find the best trading pair for base_asset based on account's tradeable pairs.
+        For BUY: requires positive quote balance.
+        For SELL: just needs a valid pair (no quote balance needed).
         Returns (pair_symbol, quote_asset, available_quote_balance) or (None,None,0)."""
         pairs = self.get_tradeable_pairs()
         available_quotes = pairs.get(base_asset, [])
@@ -370,7 +384,18 @@ class BinanceClient:
         if preferred_quotes is None:
             preferred_quotes = ["PLN", "USDC", "EUR", "BTC", "ETH", "BNB", "USDT", "BUSD"]
 
-        # Try preferred quotes first, then remaining by balance
+        if side == "SELL":
+            # For SELL: just find first available pair in preferred order
+            for q in preferred_quotes:
+                if q in available_quotes:
+                    return f"{base_asset}{q}", q, bal_map.get(q, 0)
+            # Fallback: any available pair
+            if available_quotes:
+                q = available_quotes[0]
+                return f"{base_asset}{q}", q, bal_map.get(q, 0)
+            return None, None, 0.0
+
+        # BUY: need quote balance
         best_pair = None
         best_quote = None
         best_bal = 0.0

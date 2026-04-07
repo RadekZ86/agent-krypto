@@ -104,7 +104,7 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     continue
 
                 # Find a pair to sell on
-                pair, quote_asset, _ = client.find_best_pair(symbol, balances)
+                pair, quote_asset, _ = client.find_best_pair(symbol, balances, side="SELL")
                 if pair is None:
                     # Fallback to configured pair
                     pair = settings.binance_symbols.get(symbol, f"{symbol}{settings.exchange_quote_currency}")

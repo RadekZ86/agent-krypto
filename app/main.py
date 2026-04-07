@@ -453,11 +453,18 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
                 lot_filter = next((f for f in filters if f["filterType"] == "LOT_SIZE"), None)
                 if lot_filter:
                     step = float(lot_filter["stepSize"])
+                    min_qty = float(lot_filter.get("minQty", 0))
                     if step > 0:
                         import math
                         qty_floored = math.floor(qty / step) * step
+                        # Determine decimal precision from step size
+                        step_str = f"{step:.10f}".rstrip("0")
+                        decimals = len(step_str.split(".")[-1]) if "." in step_str else 0
+                        qty_floored = round(qty_floored, decimals)
                     else:
                         qty_floored = qty
+                    if qty_floored < min_qty:
+                        continue
                 else:
                     qty_floored = qty
 
