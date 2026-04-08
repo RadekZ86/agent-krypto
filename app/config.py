@@ -219,6 +219,18 @@ AGENT_MODE_PROFILES = {
         "max_open_positions": 999,
         "allocation_scale": 1.2,
     },
+    "trading": {
+        "label": "Trading",
+        "description": "Agresywny handel: niski prog wejscia, duza alokacja, szybkie obroty. Maksymalny zysk = maksymalne ryzyko.",
+        "buy_score_threshold": 3,
+        "exploration_rate": 0.35,
+        "profit_target": 0.02,
+        "stop_loss": 0.07,
+        "max_hold_hours": 12,
+        "max_trades_per_day": 9999,
+        "max_open_positions": 9999,
+        "allocation_scale": 1.5,
+    },
 }
 
 
