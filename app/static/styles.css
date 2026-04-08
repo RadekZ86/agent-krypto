@@ -2589,12 +2589,7 @@ th {
     }
 }
 
-/* Dark mode adjustments for OLED screens */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg: #000000;
-    }
-}
+/* Dark mode — keep original dark-blue-gray, no OLED pure-black override */
 
 /* Landscape mobile */
 @media (max-height: 500px) and (orientation: landscape) {
