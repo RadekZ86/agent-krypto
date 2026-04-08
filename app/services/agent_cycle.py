@@ -103,6 +103,14 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                         logger.info("LIVE %s: brak %s do sprzedazy", user.username, symbol)
                     continue
 
+                # Ensure asset is in Spot (redeem from Earn if needed)
+                spot_held = _ensure_spot_balance(client, user, symbol, held)
+                if spot_held <= 0:
+                    if _should_log_skip(user.username, "SELL", f"earn_stuck_{symbol}"):
+                        logger.info("LIVE %s: %s w Earn, spot=0 po redeem", user.username, symbol)
+                    continue
+                held = spot_held
+
                 # Find a pair to sell on
                 pair, quote_asset, _ = client.find_best_pair(symbol, balances, side="SELL")
                 if pair is None:
@@ -204,6 +212,45 @@ def _get_allocation(user, quote_bal: float) -> float:
         return quote_bal * (alloc_value / 100.0)
 
 
+def _ensure_spot_balance(client, user, asset: str, needed: float) -> float:
+    """Ensure 'asset' has enough balance in Spot wallet. If not, redeem from Earn.
+    Returns actual spot free balance after redemption attempt."""
+    import time as _time
+    spot_free = client.get_spot_free(asset)
+    if spot_free >= needed:
+        return spot_free
+
+    # Spot balance too low — check if asset is in Earn (flexible savings)
+    earn_pos = client.get_earn_flexible_position(asset)
+    if not earn_pos:
+        return spot_free
+
+    earn_amount = float(earn_pos.get("totalAmount", 0))
+    if earn_amount <= 0:
+        return spot_free
+
+    product_id = earn_pos.get("productId", "")
+    if not product_id:
+        return spot_free
+
+    # Redeem what we need (or all if needed >= earn amount)
+    shortfall = needed - spot_free
+    if shortfall >= earn_amount * 0.95:
+        redeem_result = client.redeem_earn_flexible(product_id, redeem_all=True)
+    else:
+        redeem_result = client.redeem_earn_flexible(product_id, amount=shortfall)
+
+    if isinstance(redeem_result, dict) and "error" not in redeem_result:
+        logger.info("LIVE %s: redeemed %.4f %s from Earn to Spot", user.username, shortfall, asset)
+        _time.sleep(2)  # Wait for settlement
+        spot_free = client.get_spot_free(asset)
+    else:
+        logger.warning("LIVE %s: Earn redeem %s failed: %s", user.username, asset,
+                        redeem_result.get("error", "unknown") if isinstance(redeem_result, dict) else redeem_result)
+
+    return spot_free
+
+
 def _execute_live_buy(client, session: Session, user, symbol: str, balances: list[dict]) -> dict | None:
     """Execute a LIVE BUY for a symbol.
     Strategy:
@@ -243,6 +290,15 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
             allocation = min_order
         if allocation > qbal:
             allocation = qbal
+
+        # Ensure quote currency is actually in Spot (not stuck in Earn)
+        spot_free = _ensure_spot_balance(client, user, q, allocation)
+        if spot_free < min_order:
+            logger.info("LIVE %s: %s w Earn, spot=%.4f < min %.1f, pomijam", user.username, q, spot_free, min_order)
+            continue  # Try next quote
+        if spot_free < allocation:
+            allocation = spot_free  # Use whatever we could redeem
+
         return _place_buy_order(client, session, user, alt_pair, q, allocation)
 
     # ---------- 2. BRIDGE BUY: convert held currency → needed quote → ALT ----------
@@ -271,6 +327,13 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
                 src_allocation = source_min
             if src_allocation > source_bal:
                 src_allocation = source_bal
+
+            # Ensure source currency is in Spot (not Earn)
+            src_spot = _ensure_spot_balance(client, user, source_currency, src_allocation)
+            if src_spot < source_min:
+                continue  # Try next source
+            if src_spot < src_allocation:
+                src_allocation = src_spot
 
             convert_pair = f"{target_quote}{source_currency}"
             logger.info("LIVE %s: bridge %s via %s->%s->%s (%.4f %s)",
