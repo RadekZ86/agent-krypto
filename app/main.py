@@ -1501,6 +1501,87 @@ async def leverage_perp_data(symbol: str) -> JSONResponse:
     return JSONResponse(data)
 
 
+@app.get("/api/leverage/chart/{symbol}")
+async def leverage_chart_api(symbol: str, interval: str = "60", limit: int = 200) -> JSONResponse:
+    """Bybit perpetual klines + leverage agent markers + funding overlay."""
+    from app.services.bybit_market import get_perp_klines, get_perp_ticker, get_funding_history
+    sym = symbol.upper()
+
+    klines = get_perp_klines(sym, interval=interval, limit=min(int(limit), 200))
+    if not klines:
+        raise HTTPException(status_code=404, detail=f"Brak danych klines dla {sym}")
+
+    # Ticker for current funding info
+    ticker = get_perp_ticker(sym) or {}
+
+    # Funding history for overlay
+    funding = get_funding_history(sym, limit=50)
+
+    # Leverage trade markers from DB
+    with SessionLocal() as session:
+        from app.models import LeverageSimTrade
+        trades = session.execute(
+            select(LeverageSimTrade)
+            .where(LeverageSimTrade.symbol == sym)
+            .order_by(desc(LeverageSimTrade.opened_at))
+            .limit(50)
+        ).scalars().all()
+
+        markers = []
+        for t in trades:
+            # Entry marker
+            markers.append({
+                "time": int(t.opened_at.timestamp()),
+                "type": "entry",
+                "side": t.side,
+                "leverage": t.leverage,
+                "price": t.entry_price,
+                "score": t.decision_score,
+                "reason": (t.decision_reason or "")[:120],
+            })
+            # Exit marker
+            if t.closed_at and t.exit_price:
+                markers.append({
+                    "time": int(t.closed_at.timestamp()),
+                    "type": "exit",
+                    "side": t.side,
+                    "leverage": t.leverage,
+                    "price": t.exit_price,
+                    "pnl": t.pnl,
+                    "pnl_pct": t.pnl_pct,
+                    "reason": t.close_reason or "",
+                    "status": t.status,
+                })
+
+        # Open positions for price lines
+        open_positions = session.execute(
+            select(LeverageSimTrade)
+            .where(LeverageSimTrade.symbol == sym, LeverageSimTrade.status == "OPEN")
+        ).scalars().all()
+        positions = [{
+            "side": p.side,
+            "entry_price": p.entry_price,
+            "liquidation_price": p.liquidation_price,
+            "take_profit": p.take_profit,
+            "stop_loss": p.stop_loss,
+            "leverage": p.leverage,
+            "margin_used": p.margin_used,
+        } for p in open_positions]
+
+    return JSONResponse({
+        "symbol": sym,
+        "interval": interval,
+        "klines": klines,
+        "markers": sorted(markers, key=lambda m: m["time"]),
+        "positions": positions,
+        "funding_rate": ticker.get("funding_rate", 0),
+        "funding_rate_pct": ticker.get("funding_rate_pct", 0),
+        "mark_price": ticker.get("mark_price", 0),
+        "index_price": ticker.get("index_price", 0),
+        "funding_history": funding,
+    })
+
+
 # ============== BYBIT API ENDPOINTS ==============
 
 @app.get("/api/bybit/test")

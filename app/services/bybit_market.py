@@ -46,6 +46,45 @@ def _get(path: str, params: dict) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Perpetual klines (candlestick data)
+# ---------------------------------------------------------------------------
+
+def get_perp_klines(symbol: str, interval: str = "60", limit: int = 200) -> list[dict]:
+    """Fetch OHLCV klines for a linear perpetual from Bybit public API.
+
+    Args:
+        symbol: e.g. "BTC" (without USDT suffix)
+        interval: 1,3,5,15,30,60,120,240,360,720,D,W,M
+        limit: max 200
+
+    Returns list of dicts sorted oldest→newest:
+        [{time, open, high, low, close, volume, turnover}, ...]
+    """
+    bybit_sym = f"{symbol}USDT"
+    result = _get("/v5/market/kline", {
+        "category": "linear", "symbol": bybit_sym, "interval": interval, "limit": limit,
+    })
+    if not result or not result.get("list"):
+        return []
+    out = []
+    for row in result["list"]:
+        try:
+            out.append({
+                "time": int(row[0]) // 1000,  # ms → unix seconds
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+                "turnover": float(row[6]),
+            })
+        except (ValueError, TypeError, IndexError):
+            continue
+    out.sort(key=lambda x: x["time"])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Bulk ticker — ONE call returns all linear perpetual tickers
 # ---------------------------------------------------------------------------
 _BULK_TICKER_CACHE: tuple[float, dict[str, dict]] = (0.0, {})

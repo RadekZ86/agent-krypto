@@ -2541,6 +2541,317 @@ function paintLeveragePaper(data) {
             }).join("");
         }
     }
+
+    // Initialize leverage chart (once controls exist)
+    paintLeverageChartControls();
+    fetchAndPaintLeverageChart();
+}
+
+// ═══════════════════════════════════════════════════════════
+// LEVERAGE PERPETUAL CHART (Bybit klines + agent markers)
+// ═══════════════════════════════════════════════════════════
+
+let levChart = null;
+let levSelectedSymbol = "BTC";
+let levSelectedInterval = "60";
+const levIntervals = [
+    { id: "15", label: "15m" },
+    { id: "60", label: "1H" },
+    { id: "240", label: "4H" },
+    { id: "D", label: "1D" },
+];
+
+function paintLeverageChartControls() {
+    const symContainer = document.getElementById("lev-chart-symbols");
+    const intContainer = document.getElementById("lev-chart-intervals");
+    if (!symContainer || !intContainer) return;
+
+    // Symbol buttons — use tracked symbols that have leverage positions, or top 8
+    const topSymbols = ["BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK"];
+    symContainer.innerHTML = topSymbols.map(s =>
+        `<button class="switcher-button${s === levSelectedSymbol ? " active" : ""}" data-lev-sym="${s}">${s}</button>`
+    ).join("");
+    symContainer.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", () => {
+            levSelectedSymbol = btn.dataset.levSym;
+            symContainer.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            fetchAndPaintLeverageChart();
+        });
+    });
+
+    // Interval buttons
+    intContainer.innerHTML = levIntervals.map(i =>
+        `<button class="switcher-button${i.id === levSelectedInterval ? " active" : ""}" data-lev-int="${i.id}">${i.label}</button>`
+    ).join("");
+    intContainer.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", () => {
+            levSelectedInterval = btn.dataset.levInt;
+            intContainer.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            fetchAndPaintLeverageChart();
+        });
+    });
+}
+
+let _levChartCache = {};
+
+async function fetchAndPaintLeverageChart() {
+    const container = document.getElementById("lev-chart-container");
+    const infoBox = document.getElementById("lev-chart-info");
+    if (!container) return;
+
+    const cacheKey = `${levSelectedSymbol}_${levSelectedInterval}`;
+    const cached = _levChartCache[cacheKey];
+    if (cached && Date.now() - cached.ts < 120000) {
+        paintLeverageChart(cached.data);
+        return;
+    }
+
+    container.innerHTML = `<div class="empty-state">Ładowanie wykresu ${levSelectedSymbol}USDT...</div>`;
+
+    try {
+        const resp = await fetch(`/api/leverage/chart/${levSelectedSymbol}?interval=${levSelectedInterval}&limit=200`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        _levChartCache[cacheKey] = { data, ts: Date.now() };
+        paintLeverageChart(data);
+    } catch (err) {
+        container.innerHTML = `<div class="empty-state">Błąd ładowania wykresu: ${err.message}</div>`;
+    }
+}
+
+function destroyLevChart() {
+    if (levChart) {
+        levChart.remove();
+        levChart = null;
+    }
+}
+
+function paintLeverageChart(data) {
+    const container = document.getElementById("lev-chart-container");
+    const infoBox = document.getElementById("lev-chart-info");
+    if (!container) return;
+
+    destroyLevChart();
+    container.innerHTML = "";
+
+    const klines = data.klines || [];
+    if (!klines.length) {
+        container.innerHTML = `<div class="empty-state">Brak danych klines dla ${data.symbol}.</div>`;
+        return;
+    }
+
+    const chartHeight = window.innerWidth <= 768 ? 300 : 440;
+    const chartWidth = container.clientWidth || container.parentElement?.clientWidth || window.innerWidth - 60;
+
+    levChart = LightweightCharts.createChart(container, {
+        width: chartWidth,
+        height: chartHeight,
+        layout: {
+            background: { type: "solid", color: "#0d1117" },
+            textColor: "#8b949e",
+            fontSize: 11,
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', sans-serif",
+        },
+        grid: {
+            vertLines: { color: "rgba(48,54,61,0.6)" },
+            horzLines: { color: "rgba(48,54,61,0.6)" },
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: { color: "rgba(88,166,255,0.3)", width: 1, style: 2, labelBackgroundColor: "#58a6ff" },
+            horzLine: { color: "rgba(88,166,255,0.3)", width: 1, style: 2, labelBackgroundColor: "#58a6ff" },
+        },
+        rightPriceScale: {
+            borderColor: "rgba(48,54,61,0.8)",
+            scaleMargins: { top: 0.05, bottom: 0.22 },
+        },
+        timeScale: {
+            borderColor: "rgba(48,54,61,0.8)",
+            timeVisible: true,
+            secondsVisible: false,
+            rightOffset: 3,
+        },
+        handleScroll: { vertTouchDrag: false },
+        handleScale: { axisPressedMouseMove: { time: true, price: false } },
+    });
+
+    // Deduplicate klines by time
+    const seenTimes = new Set();
+    const uniqueKlines = [];
+    for (const k of klines) {
+        if (!seenTimes.has(k.time)) {
+            seenTimes.add(k.time);
+            uniqueKlines.push(k);
+        }
+    }
+
+    // Candlestick series
+    const candleSeries = levChart.addCandlestickSeries({
+        upColor: "#3fb950",
+        downColor: "#f85149",
+        borderDownColor: "#f85149",
+        borderUpColor: "#3fb950",
+        wickDownColor: "#f85149",
+        wickUpColor: "#3fb950",
+    });
+    candleSeries.setData(uniqueKlines.map(k => ({
+        time: k.time, open: k.open, high: k.high, low: k.low, close: k.close,
+    })));
+
+    // Volume overlay
+    const volSeries = levChart.addHistogramSeries({
+        priceFormat: { type: "volume" },
+        priceScaleId: "lev-volume",
+    });
+    levChart.priceScale("lev-volume").applyOptions({
+        scaleMargins: { top: 0.84, bottom: 0 },
+    });
+    volSeries.setData(uniqueKlines.map(k => ({
+        time: k.time,
+        value: k.volume,
+        color: k.close >= k.open ? "rgba(63,185,80,0.2)" : "rgba(248,81,73,0.2)",
+    })));
+
+    // ── Agent leverage trade markers ──
+    const markers = data.markers || [];
+    if (markers.length && candleSeries) {
+        const timeSet = new Set(uniqueKlines.map(k => k.time));
+        const chartMarkers = [];
+
+        for (const m of markers) {
+            // Snap marker time to the nearest kline time
+            let bestTime = m.time;
+            if (!timeSet.has(bestTime)) {
+                let closest = null;
+                let minDiff = Infinity;
+                for (const kt of timeSet) {
+                    const diff = Math.abs(kt - bestTime);
+                    if (diff < minDiff) { minDiff = diff; closest = kt; }
+                }
+                if (closest !== null && minDiff < 86400 * 7) bestTime = closest;
+                else continue;
+            }
+
+            if (m.type === "entry") {
+                const isLong = m.side === "LONG";
+                chartMarkers.push({
+                    time: bestTime,
+                    position: isLong ? "belowBar" : "aboveBar",
+                    color: isLong ? "#3fb950" : "#f85149",
+                    shape: isLong ? "arrowUp" : "arrowDown",
+                    text: `${isLong ? "LONG" : "SHORT"} ${m.leverage}x`,
+                });
+            } else if (m.type === "exit") {
+                const pnl = m.pnl || 0;
+                const isWin = pnl >= 0;
+                const label = m.status === "LIQUIDATED" ? "LIQ" :
+                    (m.reason === "take_profit" ? "TP" :
+                    (m.reason === "stop_loss" ? "SL" : "EXIT"));
+                chartMarkers.push({
+                    time: bestTime,
+                    position: m.side === "LONG" ? "aboveBar" : "belowBar",
+                    color: isWin ? "#58a6ff" : "#d29922",
+                    shape: "circle",
+                    text: `${label} ${pnl >= 0 ? "+" : ""}${pnl.toFixed(1)}$`,
+                });
+            }
+        }
+
+        // Sort and deduplicate
+        chartMarkers.sort((a, b) => a.time - b.time);
+        const uniqueMarkers = [];
+        const seenMTimes = new Set();
+        for (const m of chartMarkers) {
+            const key = `${m.time}_${m.text}`;
+            if (!seenMTimes.has(key)) {
+                seenMTimes.add(key);
+                uniqueMarkers.push(m);
+            }
+        }
+        if (uniqueMarkers.length) candleSeries.setMarkers(uniqueMarkers);
+    }
+
+    // ── Open position lines (entry, TP, SL, liquidation) ──
+    const positions = data.positions || [];
+    for (const pos of positions) {
+        const isLong = pos.side === "LONG";
+        // Entry price line
+        candleSeries.createPriceLine({
+            price: pos.entry_price,
+            color: isLong ? "#3fb950" : "#f85149",
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: `${pos.side} ${pos.leverage}x WEJŚCIE`,
+        });
+        // Take profit
+        if (pos.take_profit) {
+            candleSeries.createPriceLine({
+                price: pos.take_profit,
+                color: "#58a6ff",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "TP",
+            });
+        }
+        // Stop loss
+        if (pos.stop_loss) {
+            candleSeries.createPriceLine({
+                price: pos.stop_loss,
+                color: "#d29922",
+                lineWidth: 1,
+                lineStyle: 2,
+                axisLabelVisible: true,
+                title: "SL",
+            });
+        }
+        // Liquidation
+        if (pos.liquidation_price) {
+            candleSeries.createPriceLine({
+                price: pos.liquidation_price,
+                color: "#f85149",
+                lineWidth: 1,
+                lineStyle: 1,
+                axisLabelVisible: true,
+                title: "⚠ LIKWIDACJA",
+            });
+        }
+    }
+
+    // ── Funding rate info bar ──
+    if (infoBox) {
+        const fr = data.funding_rate_pct || 0;
+        const frClass = fr > 0.01 ? "negative" : (fr < -0.01 ? "positive" : "");
+        const mp = data.mark_price ? numberFormatter.format(data.mark_price) : "-";
+        const ip = data.index_price ? numberFormatter.format(data.index_price) : "-";
+        const fh = (data.funding_history || []).slice(0, 5);
+        const fhHtml = fh.length ? fh.map(f => {
+            const fc = f.rate > 0.0001 ? "negative" : (f.rate < -0.0001 ? "positive" : "");
+            return `<span class="${fc}">${f.rate_pct}%</span>`;
+        }).join(" → ") : "";
+
+        infoBox.innerHTML = `
+            <div class="lev-info-row">
+                <span>Funding: <strong class="${frClass}">${fr.toFixed(4)}%</strong></span>
+                <span>Mark: <strong>$${mp}</strong></span>
+                <span>Index: <strong>$${ip}</strong></span>
+                ${fhHtml ? `<span class="lev-funding-history">Historia: ${fhHtml}</span>` : ""}
+            </div>
+        `;
+    }
+
+    // Resize handler
+    const resizeObserver = new ResizeObserver(() => {
+        if (levChart && container.clientWidth > 0) {
+            levChart.applyOptions({ width: container.clientWidth });
+        }
+    });
+    resizeObserver.observe(container);
+
+    levChart.timeScale().fitContent();
 }
 
 function paintBacktest(backtest) {

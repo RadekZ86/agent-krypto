@@ -2080,6 +2080,63 @@ th {
     margin-bottom: 12px;
 }
 
+/* ── Leverage chart ── */
+.leverage-chart-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+.leverage-chart-controls .chart-switcher-row,
+.leverage-chart-controls .chart-tabs-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.leverage-chart-controls .chart-tabs-row {
+    margin-left: auto;
+}
+.leverage-chart-box {
+    width: 100%;
+    min-height: 300px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1117;
+    margin-bottom: 8px;
+}
+.leverage-chart-info {
+    margin-bottom: 12px;
+}
+.lev-info-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 0.82rem;
+    color: var(--muted);
+    padding: 6px 8px;
+    background: rgba(13,17,23,0.5);
+    border-radius: 6px;
+}
+.lev-info-row strong {
+    color: var(--text);
+}
+.lev-funding-history {
+    font-size: 0.78rem;
+    opacity: 0.8;
+}
+@media (max-width: 768px) {
+    .leverage-chart-controls {
+        flex-direction: column;
+    }
+    .leverage-chart-controls .chart-tabs-row {
+        margin-left: 0;
+    }
+    .leverage-chart-box {
+        min-height: 260px;
+    }
+}
+
 .bybit-account-card .card-header h3 {
     display: flex;
     align-items: center;
