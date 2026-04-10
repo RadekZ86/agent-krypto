@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -11,19 +12,49 @@ from app.services.analysis_frame import build_indicator_frame
 from app.services.market_data import load_symbol_market_rows
 from app.services.probability_engine import ProbabilityEngine
 
+_EMPTY_RANKINGS: dict[str, Any] = {
+    "updated_at": None,
+    "rankings": [],
+    "best_strategy": None,
+    "computing": True,
+}
+
 
 class BacktestService:
     def __init__(self) -> None:
         self.probability_engine = ProbabilityEngine()
         self._cache: dict[str, Any] | None = None
         self._cache_created_at: datetime | None = None
+        self._computing = False
 
     def get_rankings(self, session: Session, symbols: list[str] | None = None, force_refresh: bool = False) -> dict[str, Any]:
         if not force_refresh and self._cache is not None and self._cache_created_at is not None:
             if datetime.utcnow() - self._cache_created_at < timedelta(minutes=5):
                 return self._cache
 
-        symbols_to_process = symbols or settings.tracked_symbols
+        # If cache is stale/empty, return empty immediately and compute in background
+        if not self._computing:
+            self._computing = True
+            threading.Thread(
+                target=self._compute_in_background,
+                args=(symbols,),
+                daemon=True,
+                name="backtest-compute",
+            ).start()
+        return self._cache if self._cache is not None else _EMPTY_RANKINGS
+
+    def _compute_in_background(self, symbols: list[str] | None = None) -> None:
+        """Run the heavy computation in a background thread."""
+        try:
+            from app.database import SessionLocal
+            with SessionLocal() as session:
+                self._compute(session, symbols)
+        except Exception:
+            pass
+        finally:
+            self._computing = False
+
+    def _compute(self, session: Session, symbols: list[str] | None = None) -> dict[str, Any]:
         per_strategy: list[dict[str, Any]] = []
         strategies: list[tuple[str, str, Callable[[pd.Series, dict[str, Any]], bool], Callable[[pd.Series, dict[str, Any], float], bool]]] = [
             (

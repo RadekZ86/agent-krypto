@@ -259,6 +259,13 @@ def startup_event() -> None:
         import time
         time.sleep(2)
         try:
+            # Stage 1: warm Bybit bulk ticker (single fast API call)
+            from app.services.bybit_market import _fetch_all_linear_tickers
+            _fetch_all_linear_tickers()
+        except Exception:
+            pass
+        try:
+            # Stage 2: warm market quotes + summaries + dashboard
             with SessionLocal() as session:
                 _build_dashboard_payload(session)
         except Exception:
@@ -874,10 +881,10 @@ def _build_dashboard_payload(
             "created_at": wa.created_at.isoformat() + "Z",
         })
 
-    # Pre-fetch Bybit perpetual data for all tracked symbols (public, no auth)
-    from app.services.bybit_market import get_batch_perp_snapshots
+    # Pre-fetch Bybit perpetual data — lightweight (1 API call, no per-symbol requests)
+    from app.services.bybit_market import get_batch_perp_tickers
     try:
-        _perp_data = get_batch_perp_snapshots(_all_symbols)
+        _perp_data = get_batch_perp_tickers(_all_symbols)
     except Exception:
         _perp_data = {}
 
