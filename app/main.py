@@ -23,6 +23,8 @@ from app.database import SessionLocal, init_db
 from app.models import AuditLog, Decision, FeatureSnapshot, LiveOrderLog, MarketData, OpenAIUsageLog, SimulatedTrade, User
 from app.services.auth import AuthService, APIKeyService, validate_password
 from app.services.binance_api import BinanceService
+from app.services.bybit_api import BybitService
+from app.services.leverage_engine import LeverageEngine
 from app.services.agent_cycle import AgentCycle
 from app.services.ai_advisor import AIAdvisor
 from app.services.backtest import BacktestService
@@ -106,6 +108,8 @@ live_quote_service = LiveQuoteService()
 auth_service = AuthService()
 api_key_service = APIKeyService()
 binance_service = BinanceService()
+bybit_service = BybitService()
+leverage_engine = LeverageEngine()
 
 
 # Request models for auth
@@ -183,6 +187,28 @@ def get_user_binance_client(session, user_id: int, key_id: int | None = None):
     )
 
 
+def get_user_bybit_client(session, user_id: int, key_id: int | None = None):
+    """Get a Bybit client for the user (filters by exchange='bybit')."""
+    keys = api_key_service.get_user_api_keys(session, user_id)
+    bybit_keys = [k for k in keys if k.exchange == "bybit"]
+    if not bybit_keys:
+        return None, None
+
+    selected_key = next((k for k in bybit_keys if k.id == key_id), None) if key_id is not None else bybit_keys[0]
+    if selected_key is None:
+        return None, None
+
+    api_secret = api_key_service.get_decrypted_secret(selected_key)
+    if not api_secret:
+        return selected_key, None
+
+    return selected_key, bybit_service.get_client(
+        api_key=selected_key.api_key,
+        api_secret=api_secret,
+        testnet=selected_key.is_testnet,
+    )
+
+
 def _get_client_ip(request: Request) -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
     if forwarded:
@@ -191,12 +217,6 @@ def _get_client_ip(request: Request) -> str:
     if real_ip:
         return real_ip[:45]
     return (request.client.host if request.client else "unknown")[:45]
-
-    return selected_key, binance_service.get_client(
-        api_key=selected_key.api_key,
-        api_secret=api_secret,
-        testnet=selected_key.is_testnet,
-    )
 
 
 def run_managed_cycle() -> dict[str, object]:
@@ -854,6 +874,13 @@ def _build_dashboard_payload(
             "created_at": wa.created_at.isoformat() + "Z",
         })
 
+    # Pre-fetch Bybit perpetual data for all tracked symbols (public, no auth)
+    from app.services.bybit_market import get_batch_perp_snapshots
+    try:
+        _perp_data = get_batch_perp_snapshots(_all_symbols)
+    except Exception:
+        _perp_data = {}
+
     for symbol in settings.tracked_symbols:
         market = load_latest_market_row(session, symbol)
         feature = _features_by_sym.get(symbol)
@@ -870,8 +897,8 @@ def _build_dashboard_payload(
         display_timestamp = str(live_quote["timestamp"]) if live_quote is not None else market.timestamp.isoformat()
         sym_whale_alerts = _whale_by_sym.get(symbol, [])
         latest_whale = sym_whale_alerts[0] if sym_whale_alerts else None
-        market_rows.append(
-            {
+        perp = _perp_data.get(symbol)
+        row = {
                 "symbol": symbol,
                 "price": round(display_price, 2),
                 "volume": round(market.volume, 2),
@@ -893,8 +920,16 @@ def _build_dashboard_payload(
                 "whale_signal": latest_whale["signal_type"] if latest_whale else "NONE",
                 "whale_score": latest_whale["whale_score"] if latest_whale else 0,
                 "whale_alerts_24h": len(sym_whale_alerts),
-            }
-        )
+        }
+        if perp:
+            row["funding_rate"] = perp.get("funding_rate_pct", 0)
+            row["funding_signal"] = perp.get("funding_signal", "NEUTRAL")
+            row["open_interest"] = perp.get("open_interest_value", 0)
+            row["oi_trend"] = perp.get("oi_trend", "UNKNOWN")
+            row["oi_change_pct"] = perp.get("oi_change_pct", 0)
+            row["mark_price"] = perp.get("mark_price", 0)
+            row["premium_pct"] = perp.get("premium_pct", 0)
+        market_rows.append(row)
 
     resolved_chart_focus_symbol = chart_focus_symbol if chart_focus_symbol in settings.tracked_symbols else None
     if resolved_chart_focus_symbol is None and market_rows:
@@ -953,6 +988,8 @@ def _build_dashboard_payload(
     trade_ranking = None
     binance_wallet = None
     live_portfolio = None
+    bybit_wallet = None
+    bybit_positions = None
     if current_user is not None:
         _, client = get_user_binance_client(session, current_user.id)
         if client is not None:
@@ -983,6 +1020,27 @@ def _build_dashboard_payload(
                     live_portfolio = client.get_portfolio_with_cost_basis(quote_for_pnl)
                 except Exception:
                     pass
+
+        # --- Bybit wallet + positions ---
+        _, bybit_client = get_user_bybit_client(session, current_user.id)
+        if bybit_client is not None and user_trading_mode == "LIVE":
+            try:
+                bybit_wallet = bybit_client.get_portfolio_value()
+                if isinstance(bybit_wallet, dict) and "error" in bybit_wallet:
+                    bybit_wallet = None
+            except Exception:
+                bybit_wallet = None
+            try:
+                bybit_positions = bybit_client.get_open_positions_summary()
+            except Exception:
+                bybit_positions = None
+
+    # --- Leverage paper trading snapshot ---
+    leverage_snapshot = None
+    try:
+        leverage_snapshot = leverage_engine.get_snapshot(session)
+    except Exception:
+        pass
 
     # --- Build live_stats from LiveOrderLog + live_portfolio when LIVE ---
     live_stats: dict[str, object] | None = None
@@ -1055,6 +1113,9 @@ def _build_dashboard_payload(
         "trade_ranking": trade_ranking,
         "binance_wallet": binance_wallet,
         "live_portfolio": live_portfolio,
+        "bybit_wallet": bybit_wallet,
+        "bybit_positions": bybit_positions,
+        "leverage_paper": leverage_snapshot,
         "live_stats": live_stats,
         "live_orders": [
             {
@@ -1412,3 +1473,165 @@ async def check_leverage(user: User = Depends(require_auth)) -> JSONResponse:
             })
         result = client.check_margin_available()
         return JSONResponse(result)
+
+
+# ============== LEVERAGE PAPER TRADING ==============
+
+@app.get("/api/leverage/snapshot")
+async def leverage_snapshot_api() -> JSONResponse:
+    """Get leverage paper trading snapshot."""
+    with SessionLocal() as session:
+        return JSONResponse(leverage_engine.get_snapshot(session))
+
+
+@app.get("/api/leverage/perp/{symbol}")
+async def leverage_perp_data(symbol: str) -> JSONResponse:
+    """Get Bybit perpetual market data for a symbol (public, no auth)."""
+    from app.services.bybit_market import get_perp_snapshot
+    data = get_perp_snapshot(symbol.upper())
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Brak danych perpetual dla {symbol}")
+    return JSONResponse(data)
+
+
+# ============== BYBIT API ENDPOINTS ==============
+
+@app.get("/api/bybit/test")
+async def test_bybit_connection(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Test Bybit API connection with specified key."""
+    with SessionLocal() as session:
+        selected_key, client = get_user_bybit_client(session, user.id, key_id)
+        if selected_key is None:
+            raise HTTPException(status_code=404, detail="Klucz API Bybit nie znaleziony")
+        if client is None:
+            raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
+
+        success, message = client.test_connection()
+        return JSONResponse({
+            "success": success,
+            "message": message,
+            "key_label": selected_key.label,
+            "is_testnet": selected_key.is_testnet,
+        })
+
+
+@app.get("/api/bybit/portfolio")
+async def get_bybit_portfolio(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
+    """Get Bybit portfolio value (wallet + positions)."""
+    with SessionLocal() as session:
+        selected_key, client = get_user_bybit_client(session, user.id, key_id)
+        if selected_key is None:
+            raise HTTPException(status_code=404, detail="Klucz API Bybit nie znaleziony")
+        if client is None:
+            raise HTTPException(status_code=500, detail="Błąd odszyfrowywania klucza")
+
+        portfolio = client.get_portfolio_value()
+        if "error" in portfolio:
+            logger.warning("Bybit portfolio error for user %s: %s", user.id, portfolio["error"])
+            raise HTTPException(status_code=400, detail="Nie udało się pobrać portfela Bybit.")
+        return JSONResponse(portfolio)
+
+
+@app.get("/api/bybit/positions")
+async def get_bybit_positions(user: User = Depends(require_auth)) -> JSONResponse:
+    """Get open Bybit perpetual positions."""
+    with SessionLocal() as session:
+        _, client = get_user_bybit_client(session, user.id)
+        if client is None:
+            return JSONResponse({"positions": []})
+        positions = client.get_open_positions_summary()
+        return JSONResponse({"positions": positions})
+
+
+@app.get("/api/bybit/leverage/{symbol}")
+async def get_bybit_leverage_info(symbol: str, user: User = Depends(require_auth)) -> JSONResponse:
+    """Get leverage info for a Bybit symbol."""
+    with SessionLocal() as session:
+        _, client = get_user_bybit_client(session, user.id)
+        if client is None:
+            raise HTTPException(status_code=400, detail="Brak klucza API Bybit.")
+        info = client.get_leverage_info(symbol)
+        if "error" in info:
+            raise HTTPException(status_code=400, detail=info["error"])
+        return JSONResponse(info)
+
+
+@app.post("/api/bybit/leverage/{symbol}")
+@limiter.limit("10/minute")
+async def set_bybit_leverage(request: Request, symbol: str, user: User = Depends(require_auth)) -> JSONResponse:
+    """Set leverage for a Bybit symbol."""
+    body = await request.json()
+    leverage = str(body.get("leverage", "1"))
+    with SessionLocal() as session:
+        _, client = get_user_bybit_client(session, user.id)
+        if client is None:
+            raise HTTPException(status_code=400, detail="Brak klucza API Bybit.")
+        result = client.set_leverage(symbol, leverage, leverage)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return JSONResponse({"success": True, "symbol": symbol, "leverage": leverage})
+
+
+@app.post("/api/bybit/trade")
+@limiter.limit("10/minute")
+async def place_bybit_trade(request: Request, user: User = Depends(require_auth)) -> JSONResponse:
+    """Place a trade on Bybit (spot or linear perpetual)."""
+    body = await request.json()
+    symbol = body.get("symbol")
+    side = body.get("side")  # Buy / Sell
+    order_type = body.get("order_type", "Market")  # Market / Limit
+    qty = str(body.get("qty", "0"))
+    category = body.get("category", "linear")
+    price = body.get("price")
+    leverage = body.get("leverage")
+    take_profit = body.get("take_profit")
+    stop_loss = body.get("stop_loss")
+    reduce_only = body.get("reduce_only", False)
+
+    if not symbol or not side or float(qty) <= 0:
+        raise HTTPException(status_code=400, detail="Brak wymaganych pól: symbol, side, qty")
+
+    with SessionLocal() as session:
+        _, client = get_user_bybit_client(session, user.id)
+        if client is None:
+            raise HTTPException(status_code=400, detail="Brak klucza API Bybit.")
+
+        result = client.place_order(
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            qty=qty,
+            category=category,
+            price=str(price) if price else None,
+            leverage=str(leverage) if leverage else None,
+            take_profit=str(take_profit) if take_profit else None,
+            stop_loss=str(stop_loss) if stop_loss else None,
+            reduce_only=reduce_only,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return JSONResponse({"success": True, "order": result})
+
+
+@app.get("/api/bybit/orders")
+async def get_bybit_orders(user: User = Depends(require_auth), category: str = "linear") -> JSONResponse:
+    """Get open Bybit orders."""
+    with SessionLocal() as session:
+        _, client = get_user_bybit_client(session, user.id)
+        if client is None:
+            return JSONResponse({"orders": []})
+        orders = client.get_open_orders(category)
+        if "error" in orders:
+            return JSONResponse({"orders": []})
+        return JSONResponse({"orders": orders.get("list", [])})
+
+
+@app.get("/api/bybit/history")
+async def get_bybit_trade_history(user: User = Depends(require_auth), category: str = "linear", limit: int = 50) -> JSONResponse:
+    """Get Bybit closed P&L history — used for agent learning."""
+    with SessionLocal() as session:
+        _, client = get_user_bybit_client(session, user.id)
+        if client is None:
+            return JSONResponse({"history": []})
+        history = client.get_trading_history(category, min(limit, 100))
+        return JSONResponse({"history": history})

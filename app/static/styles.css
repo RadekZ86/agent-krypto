@@ -2024,6 +2024,74 @@ th {
     color: var(--muted);
 }
 
+.badge-leverage {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--border-radius);
+    font-size: 0.65rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-weight: 700;
+    background: rgba(255, 152, 0, 0.25);
+    color: var(--warning);
+}
+
+/* Portfolio section headers */
+.portfolio-section-header {
+    grid-column: 1 / -1;
+    padding: 8px 12px;
+    margin: 4px 0 2px;
+    border-radius: var(--border-radius);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+.portfolio-section-header.combined {
+    background: linear-gradient(135deg, rgba(0,200,83,0.15), rgba(33,150,243,0.15));
+    color: var(--success);
+    font-size: 0.9rem;
+    text-align: center;
+}
+.portfolio-section-header.binance {
+    background: rgba(240,185,11,0.12);
+    color: #f0b90b;
+}
+.portfolio-section-header.bybit {
+    background: rgba(255,152,0,0.12);
+    color: var(--warning);
+}
+.portfolio-section-header.leverage {
+    background: rgba(255,152,0,0.08);
+    color: var(--warning);
+}
+.portfolio-section-header.paper {
+    background: rgba(33,150,243,0.1);
+    color: var(--info);
+}
+
+.leverage-card .card-header h3 {
+    color: var(--warning);
+}
+.leverage-card .quick-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.bybit-account-card .card-header h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bybit-positions h4 {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 8px;
+}
+
 /* ── Whale indicators ── */
 .whale-none { color: var(--muted); opacity: .4; }
 .whale-strong { font-size: 1.1rem; filter: drop-shadow(0 0 4px rgba(59,130,246,.6)); }

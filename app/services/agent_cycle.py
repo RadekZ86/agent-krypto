@@ -10,6 +10,7 @@ from app.config import settings
 from app.services.decision_engine import DecisionEngine
 from app.services.indicators import IndicatorService
 from app.services.learning import LearningService
+from app.services.leverage_engine import LeverageEngine
 from app.services.market_data import MarketDataService
 from app.services.wallet import WalletService
 
@@ -426,11 +427,22 @@ class AgentCycle:
         self.decision_engine = DecisionEngine()
         self.wallet = WalletService()
         self.learning = LearningService()
+        self.leverage_engine = LeverageEngine()
         self._lock = Lock()
 
     def run(self, session: Session, symbols: list[str] | None = None) -> dict[str, object]:
         with self._lock:
             symbols_to_process = symbols or settings.tracked_symbols
+
+            # Pre-fetch Bybit perpetual data for all symbols (public, no auth needed)
+            from app.services.bybit_market import get_batch_perp_snapshots
+            try:
+                perp_data_map = get_batch_perp_snapshots(symbols_to_process)
+                if perp_data_map:
+                    logger.info("Bybit perp data loaded for %d symbols", len(perp_data_map))
+            except Exception:
+                logger.exception("Failed to fetch Bybit perp data")
+                perp_data_map = {}
             results: list[dict[str, object]] = []
 
             for symbol in symbols_to_process:
@@ -461,6 +473,20 @@ class AgentCycle:
                     logger.info("🐋 Whale alert %s: %s score=%.1f vol_z=%.1f",
                                 symbol, whale_signal, whale_score_val,
                                 float(feature_row.get("vol_zscore", 0)))
+
+                # ── Leverage paper trading evaluation (learning mode) ──
+                leverage_result = None
+                try:
+                    perp_sym = perp_data_map.get(symbol)
+                    leverage_result = self.leverage_engine.evaluate(session, symbol, feature_row, perp_data=perp_sym)
+                    if leverage_result:
+                        logger.info("LEVERAGE %s %s %sx @ $%.2f (score=%d)",
+                                    leverage_result["action"], symbol,
+                                    leverage_result.get("leverage", "?"),
+                                    leverage_result.get("price", 0),
+                                    leverage_result.get("score", 0))
+                except Exception:
+                    logger.exception("Leverage engine error for %s", symbol)
 
                 # Mirror BUY/SELL to real Binance for LIVE users
                 if decision.decision in ("BUY", "SELL"):
@@ -498,6 +524,7 @@ class AgentCycle:
                         "top_probability": feature_row.get("top_probability"),
                         "whale_score": feature_row.get("whale_score", 0),
                         "whale_signal": feature_row.get("whale_signal", "NONE"),
+                        "leverage_action": leverage_result,
                     }
                 )
 

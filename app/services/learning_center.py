@@ -132,6 +132,49 @@ LEARNING_ARTICLES = [
         "summary": "Najgorsze wejscia czesto pojawiaja sie po gonieniu swiecy. Agent powinien preferowac cofniecia do strefy wartosci i szukac potwierdzenia zamiast wejsc na emocji.",
         "focus": ["pullback", "entry quality", "discipline"],
     },
+    # ── Leverage / Perpetual trading articles ──
+    {
+        "title": "Kontrakty perpetual: jak dzialaja i czym roznia sie od spotu",
+        "source": "Bybit Learn",
+        "url": "https://learn.bybit.com/trading/what-are-perpetual-contracts/",
+        "summary": "Kontrakty perpetual to instrumenty pochodne bez daty wygasniecia. Pozwalaja na LONG i SHORT z dzwignia. Kluczowe roznice: funding rate co 8h, liquidation price, margin mode. Agent musi rozumiec, ze dzwignia mnoznik nie tylko zysk, ale tez ryzyko.",
+        "focus": ["perpetual", "funding rate", "leverage basics"],
+    },
+    {
+        "title": "Dzwignia finansowa: jak dobrac i nie stracic konta",
+        "source": "Bybit Learn",
+        "url": "https://learn.bybit.com/trading/what-is-leverage-in-trading/",
+        "summary": "Dzwignia 2-5x jest bezpieczna dla poczatkujacych. 10x+ wymaga scislych stop-lossow. Przy 100x nawet 1% ruchu ceny oznacza likwidacje. Agent powinien zaczynac od niskiej dzwigni i powoli zwiększać gdy win rate rosnie.",
+        "focus": ["leverage sizing", "risk", "liquidation"],
+    },
+    {
+        "title": "Funding rate: ukryty koszt trzymania pozycji perpetual",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/what-are-perpetual-futures-contracts",
+        "summary": "Funding rate to oplata co 8h miedzy longami i shortami. Pozytywny FR = longi placa shortom. Wysoki FR oznacza ze rynek jest przegrzany (zla pora na LONG). Agent powinien uwzglednic FR w decyzji wejscia.",
+        "focus": ["funding rate", "cost", "sentiment"],
+    },
+    {
+        "title": "Likwidacja pozycji: jak ustawic stop-loss i margin",
+        "source": "Bybit Learn",
+        "url": "https://learn.bybit.com/trading/what-is-liquidation-in-trading/",
+        "summary": "Likwidacja nastepuje gdy margin spada ponizej maintenance margin. Isolated margin ogranicza strate do pozycji. Cross margin uzywa calego konta. Agent powinien zawsze uzywac isolated margin i stop-loss PRZED likwidacja.",
+        "focus": ["liquidation", "isolated margin", "cross margin", "stop loss"],
+    },
+    {
+        "title": "Short selling: jak zarabiac na spadkach",
+        "source": "Investopedia",
+        "url": "https://www.investopedia.com/terms/s/shortselling.asp",
+        "summary": "SHORT to sprzedaz pozyczona z odkupem taniej. Na perpetualach: otwierasz SELL, zamykasz BUY. Ryzyko: short squeeze (nagly wzrost). Agent powinien shortowac przy RSI > 70, MACD bearish i trendzie DOWN.",
+        "focus": ["short selling", "short squeeze", "bearish signals"],
+    },
+    {
+        "title": "Position sizing z dzwignia: regula 1-2% ryzyka",
+        "source": "Binance Academy",
+        "url": "https://www.binance.com/en/academy/articles/a-complete-guide-to-cryptocurrency-trading-for-beginners",
+        "summary": "Przy dzwigni regula 1-2% ryzyka na trade staje sie krytyczna. Przy 10x dzwigni, 10% ruchu = 100% straty. Agent powinien obliczac: rozmiar pozycji = (kapital * max_risk%) / (stop_loss% * dzwignia).",
+        "focus": ["position sizing", "risk per trade", "leverage math"],
+    },
 ]
 
 
@@ -183,6 +226,31 @@ KNOWLEDGE_BASE = [
     {
         "title": "Playbook 12: drawdown defense",
         "description": "Po serii strat agent powinien schlodzic tempo i podniesc wymagania wejscia. Uczenie: ochrona kapitalu ma pierwszenstwo przed aktywnoscia.",
+    },
+    # ── Leverage / Perpetual playbooks ──
+    {
+        "title": "Playbook 13: leverage entry discipline",
+        "description": "Pozycja z dzwignia wymaga silniejszej konfluencji niz spot. Agent powinien wymuszac min. 4 sygnaly potwierdzajace i ustawic stop-loss PRZED wejsciem. Dzwignia rosnie dopiero po serii WIN.",
+    },
+    {
+        "title": "Playbook 14: leverage sizing (regula 1-2%)",
+        "description": "Przy dzwigni 5x ryzykuj max 1% konta na trade. Przy 10x max 0.5%. Rozmiar = kapital * risk% / (SL% * leverage). Agent NIGDY nie powinien overleverage — lepiej mniejsza pozycja niz wieksze ryzyko.",
+    },
+    {
+        "title": "Playbook 15: short selling signals",
+        "description": "SHORT otwieraj przy: RSI > 70, MACD bearish crossover, cena ponizej VWAP, trend DOWN, wolumen sprzedazy > kupna. Zamykaj SHORT przy RSI < 35 lub dywergencji byczej. UWAGA na short squeeze.",
+    },
+    {
+        "title": "Playbook 16: funding rate awareness",
+        "description": "Przed otwarciem LONG sprawdz funding rate. Jesli FR > 0.05%, rynek jest przegrzany — rozważ SHORT lub czekaj. Negatywny FR to okazja na LONG. Agent powinien nauczyc sie korelacji FR z odwroceniami.",
+    },
+    {
+        "title": "Playbook 17: liquidation avoidance",
+        "description": "Zawsze uzywaj isolated margin. Stop-loss musi byc DALEJ od ceny wejscia niz liquidation price. Agent powinien obliczac: liq_distance = 1/leverage. Przy 10x liq jest 10% od wejscia.",
+    },
+    {
+        "title": "Playbook 18: leverage progression",
+        "description": "Zacznij od 2x, po 10 wygranych z rzedu podwyz do 3x, potem 5x. Kazda strata obniża o 1 poziom. Max 10x dopiero przy win rate > 60%. Agent uczy sie ostrożnego skalowania dzwigni.",
     },
 ]
 

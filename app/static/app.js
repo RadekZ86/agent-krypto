@@ -281,21 +281,30 @@ function renderApiKeysList() {
 
 function updateBinanceKeySelector() {
     const selector = document.getElementById('binance-key-selector');
-    if (!selector) return;
-    
-    selector.innerHTML = '<option value="">Wybierz klucz API</option>' + 
-        userApiKeys.map(key => `
-            <option value="${key.id}">${key.label || key.exchange.toUpperCase()} - ${key.api_key} ${key.is_testnet ? '(Testnet)' : ''}</option>
-        `).join('');
+    if (selector) {
+        const binanceKeys = userApiKeys.filter(k => k.exchange === 'binance');
+        selector.innerHTML = '<option value="">Wybierz klucz API</option>' + 
+            binanceKeys.map(key => `
+                <option value="${key.id}">${key.label || 'BINANCE'} - ${key.api_key} ${key.is_testnet ? '(Testnet)' : ''}</option>
+            `).join('');
+    }
+    const bybitSelector = document.getElementById('bybit-key-selector');
+    if (bybitSelector) {
+        const bybitKeys = userApiKeys.filter(k => k.exchange === 'bybit');
+        bybitSelector.innerHTML = '<option value="">Wybierz klucz API</option>' + 
+            bybitKeys.map(key => `
+                <option value="${key.id}">${key.label || 'BYBIT'} - ${key.api_key} ${key.is_testnet ? '(Testnet)' : ''}</option>
+            `).join('');
+    }
 }
 
-async function addApiKey(apiKey, apiSecret, isTestnet, permissions) {
+async function addApiKey(exchange, apiKey, apiSecret, isTestnet, permissions) {
     try {
         const response = await fetch('/api/keys', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                exchange: 'binance',
+                exchange: exchange,
                 api_key: apiKey,
                 api_secret: apiSecret,
                 is_testnet: isTestnet,
@@ -335,15 +344,19 @@ async function deleteApiKey(keyId) {
 }
 
 async function testApiKey(keyId) {
+    const key = userApiKeys.find(k => k.id === keyId);
+    const exchange = key ? key.exchange : 'binance';
+    const exchangeLabel = exchange === 'bybit' ? 'Bybit' : 'Binance';
+    const testUrl = exchange === 'bybit' ? `/api/bybit/test?key_id=${keyId}` : `/api/binance/test?key_id=${keyId}`;
     try {
-        setStatus('Testowanie połączenia z Binance...');
-        const response = await fetch(`/api/binance/test?key_id=${keyId}`);
+        setStatus(`Testowanie połączenia z ${exchangeLabel}...`);
+        const response = await fetch(testUrl);
         const text = await response.text();
         let data;
         try { data = JSON.parse(text); } catch { data = { detail: text || `Błąd serwera (${response.status})` }; }
         
         if (data.success) {
-            alert('✅ Połączenie z Binance działa poprawnie!\n' + (data.message || 'OK'));
+            alert(`✅ Połączenie z ${exchangeLabel} działa poprawnie!\n` + (data.message || 'OK'));
             setStatus('Test połączenia: OK');
         } else {
             alert('❌ Błąd połączenia: ' + (data.detail || data.message || 'Nieznany błąd'));
@@ -403,6 +416,88 @@ async function loadBinanceBalances(keyId) {
             portfolioDisplay.classList.remove('hidden');
             portfolioDisplay.querySelector('.value').textContent = 
                 `$${parseFloat(portfolioData.total_value_usdt).toFixed(2)} USDT`;
+        }
+    } catch (error) {
+        if (balancesContainer) balancesContainer.innerHTML = `<p class="empty-state">Błąd: ${error.message}</p>`;
+    }
+}
+
+async function loadBybitData(keyId) {
+    const balancesContainer = document.getElementById('bybit-balances');
+    const portfolioDisplay = document.getElementById('bybit-portfolio-value');
+    const positionsContainer = document.getElementById('bybit-positions');
+    const positionsList = document.getElementById('bybit-positions-list');
+
+    if (!keyId) {
+        if (balancesContainer) balancesContainer.innerHTML = '<p class="empty-state">Wybierz klucz API aby zobaczyć balans Bybit</p>';
+        if (portfolioDisplay) portfolioDisplay.classList.add('hidden');
+        if (positionsContainer) positionsContainer.classList.add('hidden');
+        return;
+    }
+
+    try {
+        if (balancesContainer) balancesContainer.innerHTML = '<p class="empty-state">Ładowanie...</p>';
+
+        const [portRes, posRes] = await Promise.all([
+            fetch(`/api/bybit/portfolio?key_id=${keyId}`),
+            fetch('/api/bybit/positions')
+        ]);
+
+        const portText = await portRes.text();
+        const posText = await posRes.text();
+        let portData, posData;
+        try { portData = JSON.parse(portText); } catch { portData = { detail: portText || `Błąd (${portRes.status})` }; }
+        try { posData = JSON.parse(posText); } catch { posData = { positions: [] }; }
+
+        if (!portRes.ok) {
+            throw new Error(portData.detail || 'Nie udało się pobrać danych Bybit');
+        }
+
+        // Show holdings
+        if (balancesContainer && portData.holdings) {
+            if (portData.holdings.length === 0) {
+                balancesContainer.innerHTML = '<p class="empty-state">Brak środków na koncie Bybit</p>';
+            } else {
+                balancesContainer.innerHTML = portData.holdings.map(h => `
+                    <div class="balance-item">
+                        <span class="balance-asset">${h.asset}</span>
+                        <span class="balance-amount">${parseFloat(h.total).toFixed(4)} ${h.unrealized_pnl ? `<small style="color:${h.unrealized_pnl >= 0 ? 'var(--positive)' : 'var(--negative)'}">(${h.unrealized_pnl >= 0 ? '+' : ''}${h.unrealized_pnl.toFixed(2)})</small>` : ''}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Show portfolio value
+        if (portfolioDisplay && portData.total_value !== undefined) {
+            portfolioDisplay.classList.remove('hidden');
+            portfolioDisplay.querySelector('.value').textContent =
+                `$${parseFloat(portData.total_value).toFixed(2)} USDT`;
+        }
+
+        // Show open perpetual positions
+        const positions = posData.positions || [];
+        if (positionsContainer && positionsList) {
+            if (positions.length > 0) {
+                positionsContainer.classList.remove('hidden');
+                positionsList.innerHTML = positions.map(p => {
+                    const pnlColor = p.unrealized_pnl >= 0 ? 'var(--positive)' : 'var(--negative)';
+                    return `
+                    <div class="bybit-position-item" style="padding:6px 0;border-bottom:1px solid var(--border)">
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <strong>${p.symbol}</strong>
+                            <span class="badge-leverage">${p.leverage}x ${p.margin_mode}</span>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;font-size:0.85em;margin-top:4px">
+                            <span>${p.side} ${p.size}</span>
+                            <span>Wejście: $${p.entry_price.toFixed(2)}</span>
+                            <span style="color:${pnlColor}">P&L: $${p.unrealized_pnl.toFixed(2)}</span>
+                        </div>
+                        ${p.liq_price > 0 ? `<div style="font-size:0.8em;color:var(--negative)">Liq: $${p.liq_price.toFixed(2)}</div>` : ''}
+                    </div>`;
+                }).join('');
+            } else {
+                positionsContainer.classList.add('hidden');
+            }
         }
     } catch (error) {
         if (balancesContainer) balancesContainer.innerHTML = `<p class="empty-state">Błąd: ${error.message}</p>`;
@@ -519,12 +614,13 @@ function initAuthUI() {
     if (addApiKeyForm) {
         addApiKeyForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            const exchange = document.getElementById('api-exchange').value;
             const apiKey = document.getElementById('api-key-input').value;
             const apiSecret = document.getElementById('api-secret-input').value;
             const isTestnet = document.getElementById('api-testnet').checked;
             const permissions = document.getElementById('api-permissions').value;
             
-            const result = await addApiKey(apiKey, apiSecret, isTestnet, permissions);
+            const result = await addApiKey(exchange, apiKey, apiSecret, isTestnet, permissions);
             if (result.success) {
                 addApiKeyForm.classList.add('hidden');
                 addApiKeyForm.reset();
@@ -539,6 +635,14 @@ function initAuthUI() {
     if (binanceKeySelector) {
         binanceKeySelector.addEventListener('change', (e) => {
             loadBinanceBalances(e.target.value);
+        });
+    }
+
+    // Bybit key selector
+    const bybitKeySelector = document.getElementById('bybit-key-selector');
+    if (bybitKeySelector) {
+        bybitKeySelector.addEventListener('change', (e) => {
+            loadBybitData(e.target.value);
         });
     }
 
@@ -679,10 +783,12 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
     const isLive = (payload.config?.trading_mode || payload.system_status?.trading_mode) === "LIVE";
     const bw = isLive && payload.binance_wallet ? payload.binance_wallet : null;
     const ls = isLive && payload.live_stats ? payload.live_stats : null;
-    paintWallet(payload.wallet, bw, ls);
+    const bybitW = isLive && payload.bybit_wallet ? payload.bybit_wallet : null;
+    const bybitP = isLive && payload.bybit_positions ? payload.bybit_positions : null;
+    paintWallet(payload.wallet, bw, ls, bybitW);
     paintModeStrip(payload.system_status, payload.config, payload.wallet);
     paintAgentMode(payload.system_status, payload.config);
-    paintCapitalSummary(payload.wallet, bw, ls);
+    paintCapitalSummary(payload.wallet, bw, ls, bybitW, bybitP);
     paintApiUsage(payload.api_usage);
     paintBoughtCoins(bw ? (bw.holdings || []).filter(h => h.value > 1).map(h => ({symbol: h.asset, buy_value: h.value, quantity: h.total, buy_price: h.value / (h.total || 1)})) : payload.wallet.positions);
     paintWatchlist(payload.market);
@@ -713,6 +819,7 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
     paintArticles(payload.articles);
     paintSystemStatus(payload.system_status);
     paintBacktest(payload.backtest);
+    paintLeveragePaper(payload.leverage_paper);
     syncAllocUI(payload.system_status);
 }
 
@@ -724,7 +831,7 @@ function paintChartError(message) {
     document.getElementById("chart-insights").innerHTML = "";
 }
 
-function paintWallet(wallet, binanceWallet, liveStats) {
+function paintWallet(wallet, binanceWallet, liveStats, bybitWallet) {
     // Update metric labels based on mode
     const metricLabels = {
         "cash-balance": binanceWallet ? `Wolne ${binanceWallet.quote_currency || "USDT"}` : "Gotowka",
@@ -1062,8 +1169,10 @@ function paintAgentMode(systemStatus, config) {
     ` : "";
 }
 
-function paintCapitalSummary(wallet, binanceWallet, liveStats) {
+function paintCapitalSummary(wallet, binanceWallet, liveStats, bybitWallet, bybitPositions) {
     const container = document.getElementById("capital-summary");
+    const lp = dashboardState?.leverage_paper;
+
     if (binanceWallet) {
         const totalValue = binanceWallet.total_value || 0;
         const walletQuote = binanceWallet.quote_currency || "USDT";
@@ -1077,24 +1186,76 @@ function paintCapitalSummary(wallet, binanceWallet, liveStats) {
         let holdingsHtml = cryptoHoldings.map(h =>
             buildQuickCard(h.asset, formatQuote(h.value, walletQuote), `${h.total.toFixed(6)} szt.`)
         ).join("");
-        container.innerHTML = `
-            ${buildQuickCard("Portfel Binance", formatQuote(totalValue, walletQuote), "Lacznie wszystkie aktywa na Binance")}
-            ${buildQuickCard(cashLabel, formatQuote(cashValue, walletQuote), "Gotowka dostepna do handlu")}
-            ${buildQuickCard("W pozycjach", formatQuote(lockedValue, walletQuote), `${cryptoHoldings.length} aktywow w portfelu`)}
-            ${buildQuickCard("Kupione (LIVE)", `${ls.buy_count || 0} zleceń`, "Zlecenia kupna agenta")}
-            ${buildQuickCard("Sprzedane (LIVE)", `${ls.sell_count || 0} zleceń`, "Zlecenia sprzedazy agenta")}
+
+        // Combined total
+        const bybitTotal = bybitWallet ? (bybitWallet.total_value || 0) : 0;
+        const combinedTotal = totalValue + bybitTotal;
+        let combinedHtml = "";
+        if (bybitWallet) {
+            combinedHtml = `<div class="portfolio-section-header combined">💰 Łącznie wszystkie giełdy: ${formatQuote(combinedTotal, walletQuote)}</div>`;
+        }
+
+        // Binance section
+        let binanceHtml = `<div class="portfolio-section-header binance">🟡 Binance</div>
+            ${buildQuickCard("Portfel Binance", formatQuote(totalValue, walletQuote), "Łącznie aktywa na Binance")}
+            ${buildQuickCard(cashLabel, formatQuote(cashValue, walletQuote), "Gotówka do handlu")}
+            ${buildQuickCard("W pozycjach", formatQuote(lockedValue, walletQuote), `${cryptoHoldings.length} aktywów`)}
+            ${buildQuickCard("Kupione", `${ls.buy_count || 0}`, "Zlecenia BUY")}
+            ${buildQuickCard("Sprzedane", `${ls.sell_count || 0}`, "Zlecenia SELL")}
             ${buildQuickCard("Bilans P&L", formatQuote(ls.realized_pnl || 0, walletQuote), `Win rate: ${percentFormatter.format(ls.win_rate || 0)}%`)}
-            ${holdingsHtml}
-        `;
+            ${holdingsHtml}`;
+
+        // Bybit section
+        let bybitHtml = "";
+        if (bybitWallet) {
+            const bybitAvail = bybitWallet.available_balance || 0;
+            const bybitPnl = bybitWallet.total_unrealized_pnl || 0;
+            bybitHtml = `<div class="portfolio-section-header bybit">🟠 Bybit</div>
+                ${buildQuickCard("Portfel Bybit", formatQuote(bybitTotal, "USDT"), "Konto Unified")}
+                ${buildQuickCard("Bybit wolne", formatQuote(bybitAvail, "USDT"), "Dostępne do handlu")}`;
+            if (bybitPnl !== 0) {
+                bybitHtml += buildQuickCard("P&L (niezreal.)", formatQuote(bybitPnl, "USDT"), "Otwarte pozycje");
+            }
+            if (bybitPositions && bybitPositions.length > 0) {
+                bybitHtml += bybitPositions.map(p =>
+                    buildQuickCard(`${p.symbol} ${p.side}`, `${p.leverage}x | $${p.unrealized_pnl.toFixed(2)}`, `Wejście: $${p.entry_price.toFixed(2)} | ${p.size}`)
+                ).join("");
+            }
+        }
+
+        // Leverage paper section
+        let leverageHtml = "";
+        if (lp) {
+            const lpPnlClass = (lp.total_realized_pnl || 0) >= 0 ? "positive" : "negative";
+            leverageHtml = `<div class="portfolio-section-header leverage">⚡ Nauka dźwigni (Paper)</div>
+                ${buildQuickCard("Margin", `$${numberFormatter.format(lp.available_margin)}`, `z $${numberFormatter.format(lp.paper_balance)}`)}
+                ${buildQuickCard("Dźwignia", `${lp.current_leverage_level}x`, `${lp.total_trades} transakcji`)}
+                ${buildQuickCard("P&L", `<span class="${lpPnlClass}">$${numberFormatter.format(lp.total_realized_pnl || 0)}</span>`, `Win: ${percentFormatter.format(lp.win_rate || 0)}% | Liq: ${lp.liquidations}`)}`;
+        }
+
+        container.innerHTML = `${combinedHtml}${binanceHtml}${bybitHtml}${leverageHtml}`;
     } else {
         const displayStartPln = dashboardState?.config?.start_balance_display_pln || 1000;
+
+        // Paper leverage section
+        let leverageHtml = "";
+        if (lp) {
+            const lpPnlClass = (lp.total_realized_pnl || 0) >= 0 ? "positive" : "negative";
+            leverageHtml = `<div class="portfolio-section-header leverage">⚡ Nauka dźwigni (Paper)</div>
+                ${buildQuickCard("Margin", `$${numberFormatter.format(lp.available_margin)}`, `z $${numberFormatter.format(lp.paper_balance)}`)}
+                ${buildQuickCard("Dźwignia", `${lp.current_leverage_level}x`, `${lp.total_trades} transakcji`)}
+                ${buildQuickCard("P&L", `<span class="${lpPnlClass}">$${numberFormatter.format(lp.total_realized_pnl || 0)}</span>`, `Win: ${percentFormatter.format(lp.win_rate || 0)}% | Liq: ${lp.liquidations}`)}`;
+        }
+
         container.innerHTML = `
-            ${buildQuickCard("Start", formatQuote(wallet.starting_balance), `Kapital poczatkowy agenta. Reset przywraca bazowe ${percentFormatter.format(displayStartPln)} PLN.`)}
-            ${buildQuickCard("Wydal na zakupy", formatQuote(wallet.spent_on_buys), "Laczna wartosc wejsc BUY")}
-            ${buildQuickCard("Wrocilo ze sprzedazy", formatQuote(wallet.capital_returned), "Kapital odzyskany po SELL")}
-            ${buildQuickCard("Fee lacznie", formatQuote(wallet.fees_paid), "Prowizje kupna i sprzedazy")}
-            ${buildQuickCard("Zostalo gotowki", formatQuote(wallet.cash_balance), "To moze jeszcze wydac agent")}
-            ${buildQuickCard("Zablokowane", formatQuote(wallet.capital_locked_cost), "Kapital siedzi w otwartych pozycjach")}
+            <div class="portfolio-section-header paper">📄 Paper trading (Spot)</div>
+            ${buildQuickCard("Start", formatQuote(wallet.starting_balance), `Reset przywraca ${percentFormatter.format(displayStartPln)} PLN`)}
+            ${buildQuickCard("Wydał na zakupy", formatQuote(wallet.spent_on_buys), "Łączna wartość wejść BUY")}
+            ${buildQuickCard("Wróciło ze sprzedaży", formatQuote(wallet.capital_returned), "Kapitał po SELL")}
+            ${buildQuickCard("Fee łącznie", formatQuote(wallet.fees_paid), "Prowizje")}
+            ${buildQuickCard("Zostało gotówki", formatQuote(wallet.cash_balance), "Możliwe do wydania")}
+            ${buildQuickCard("Zablokowane", formatQuote(wallet.capital_locked_cost), "W otwartych pozycjach")}
+            ${leverageHtml}
         `;
     }
 }
@@ -1344,24 +1505,26 @@ function paintBoughtCoins(positions) {
 function paintTradeBuckets(trades) {
     const profitContainer = document.getElementById("profit-trades-list");
     const lossContainer = document.getElementById("loss-trades-list");
+    const isLive = (dashboardState?.config?.trading_mode || dashboardState?.system_status?.trading_mode) === "LIVE";
     const closedTrades = (trades || []).filter((trade) => trade.status === "CLOSED" && trade.profit !== null);
     const profitableTrades = closedTrades.filter((trade) => trade.profit >= 0);
     const losingTrades = closedTrades.filter((trade) => trade.profit < 0);
 
+    const sourceLabel = isLive ? "" : " (paper)";
     profitContainer.innerHTML = profitableTrades.length
         ? profitableTrades.map((trade) => buildTradeBucketItem(trade, true)).join("")
-        : `<div class="empty-state">Brak sprzedanych coinow z zyskiem.</div>`;
+        : `<div class="empty-state">Brak sprzedanych coinów z zyskiem${sourceLabel}.</div>`;
 
     lossContainer.innerHTML = losingTrades.length
         ? losingTrades.map((trade) => buildTradeBucketItem(trade, false)).join("")
-        : `<div class="empty-state">Brak sprzedanych coinow ze strata.</div>`;
+        : `<div class="empty-state">Brak sprzedanych coinów ze stratą${sourceLabel}.</div>`;
 }
 
 function paintMarket(rows) {
     const table = document.getElementById("market-table");
     const visibleRows = filterRowsBySector(rows);
     if (!visibleRows.length) {
-        table.innerHTML = `<tr><td colspan="13">Brak danych rynkowych dla wybranego sektora.</td></tr>`;
+        table.innerHTML = `<tr><td colspan="15">Brak danych rynkowych dla wybranego sektora.</td></tr>`;
         return;
     }
 
@@ -1379,6 +1542,8 @@ function paintMarket(rows) {
             <td>${percentFormatter.format(row.top_probability)}%</td>
             <td><span class="badge ${signalBadgeClass(row.reversal_signal)}">${row.reversal_signal}</span></td>
             <td>${whaleIndicator(row)}</td>
+            <td class="${fundingToneClass(row.funding_rate)}">${row.funding_rate != null ? row.funding_rate.toFixed(3) + '%' : '-'}</td>
+            <td class="${oiTrendClass(row.oi_trend)}">${row.oi_trend || '-'}</td>
             <td><span class="badge ${row.decision.toLowerCase()}">${row.decision}</span></td>
         </tr>
     `).join("");
@@ -2307,6 +2472,77 @@ function syncAllocUI(systemStatus) {
     }
 }
 
+function paintLeveragePaper(data) {
+    const statsContainer = document.getElementById("leverage-stats");
+    const openContainer = document.getElementById("leverage-open-positions");
+    const closedContainer = document.getElementById("leverage-closed-trades");
+    if (!statsContainer) return;
+
+    if (!data) {
+        statsContainer.innerHTML = `<div class="empty-state">Agent jeszcze nie rozpoczął nauki dźwigni.</div>`;
+        if (openContainer) openContainer.innerHTML = "";
+        if (closedContainer) closedContainer.innerHTML = "";
+        return;
+    }
+
+    const pnlClass = (data.total_realized_pnl || 0) >= 0 ? "positive" : "negative";
+    statsContainer.innerHTML = `
+        ${buildQuickCard("Balans Paper", `$${numberFormatter.format(data.paper_balance)}`, "Startowy kapitał wirtualny")}
+        ${buildQuickCard("Dostępny margin", `$${numberFormatter.format(data.available_margin)}`, "Wolne środki na nowe pozycje")}
+        ${buildQuickCard("Equity", `$${numberFormatter.format(data.current_equity)}`, "Margin + otwarte pozycje")}
+        ${buildQuickCard("P&L łączny", `<span class="${pnlClass}">$${numberFormatter.format(data.total_realized_pnl || 0)}</span>`, `${data.total_trades || 0} transakcji zamkniętych`)}
+        ${buildQuickCard("Win rate", `${percentFormatter.format(data.win_rate || 0)}%`, `${data.wins || 0}W / ${data.losses || 0}L`)}
+        ${buildQuickCard("Dźwignia", `${data.current_leverage_level || 2}x`, `Likwidacje: ${data.liquidations || 0}`)}
+    `;
+
+    if (openContainer) {
+        const open = data.open_positions || [];
+        if (!open.length) {
+            openContainer.innerHTML = `<div class="empty-state">Brak otwartych pozycji lewarowanych.</div>`;
+        } else {
+            openContainer.innerHTML = open.map(p => {
+                const sideClass = p.side === "LONG" ? "buy" : "sell";
+                return `<div class="stack-item">
+                    <div class="stack-item-title">
+                        <span>${p.symbol}</span>
+                        <span class="badge ${sideClass}">${p.side} ${p.leverage}x</span>
+                    </div>
+                    <div class="stack-item-meta">
+                        Wejście: $${numberFormatter.format(p.entry_price)} | Margin: $${numberFormatter.format(p.margin_used)}<br>
+                        Likwidacja: $${numberFormatter.format(p.liquidation_price)}${p.take_profit ? ` | TP: $${numberFormatter.format(p.take_profit)}` : ""}${p.stop_loss ? ` | SL: $${numberFormatter.format(p.stop_loss)}` : ""}<br>
+                        Funding: $${p.funding_fees.toFixed(4)} | ${new Date(p.opened_at).toLocaleString("pl-PL")}
+                    </div>
+                </div>`;
+            }).join("");
+        }
+    }
+
+    if (closedContainer) {
+        const closed = data.recent_closed || [];
+        if (!closed.length) {
+            closedContainer.innerHTML = `<div class="empty-state">Brak zamkniętych transakcji lewarowanych.</div>`;
+        } else {
+            closedContainer.innerHTML = closed.map(t => {
+                const pnl = t.pnl || 0;
+                const tone = pnl >= 0 ? "positive" : "negative";
+                const sideClass = t.side === "LONG" ? "buy" : "sell";
+                const statusBadge = t.status === "LIQUIDATED" ? `<span class="badge sell">LIKWIDACJA</span>` : "";
+                return `<div class="stack-item">
+                    <div class="stack-item-title">
+                        <span>${t.symbol} ${t.side} ${t.leverage}x</span>
+                        <span class="badge ${sideClass}">${t.close_reason || ""}${statusBadge}</span>
+                    </div>
+                    <div class="stack-item-meta">
+                        Wejście: $${numberFormatter.format(t.entry_price)} → Wyjście: $${numberFormatter.format(t.exit_price)}<br>
+                        P&L: <span class="${tone}">$${numberFormatter.format(pnl)} (${t.pnl_pct > 0 ? "+" : ""}${percentFormatter.format(t.pnl_pct)}%)</span><br>
+                        Funding: $${t.funding_fees.toFixed(4)} | ${t.closed_at ? new Date(t.closed_at).toLocaleString("pl-PL") : "-"}
+                    </div>
+                </div>`;
+            }).join("");
+        }
+    }
+}
+
 function paintBacktest(backtest) {
     const container = document.getElementById("backtest-ranking");
     if (!backtest?.rankings?.length) {
@@ -2396,6 +2632,19 @@ function whaleIndicator(row) {
     else if (sig === "PRICE_ANOMALY") { cls = "whale-down"; icon = "⚠️"; }
     const countBadge = count > 1 ? `<sup class="whale-count">${count}</sup>` : "";
     return `<span class="${cls}" title="${sig} (score ${score})">${icon}${countBadge}</span>`;
+}
+
+function fundingToneClass(rate) {
+    if (rate == null) return "";
+    if (rate > 0.03) return "negative";
+    if (rate < -0.01) return "positive";
+    return "";
+}
+
+function oiTrendClass(trend) {
+    if (trend === "RISING") return "positive";
+    if (trend === "FALLING") return "negative";
+    return "";
 }
 
 async function runCycle() {

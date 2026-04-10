@@ -347,6 +347,8 @@
                                         <th>P szczyt</th>
                                         <th>Setup</th>
                                         <th>🐋</th>
+                                        <th>Fund%</th>
+                                        <th>OI</th>
                                         <th>Decyzja</th>
                                     </tr>
                                 </thead>
@@ -434,6 +436,20 @@
                         </div>
                         <div class="card-body scrollable">
                             <div id="loss-trades-list" class="stack-list compact"></div>
+                        </div>
+                    </div>
+                    <!-- LEVERAGE PAPER TRADING -->
+                    <div class="card full-width-card leverage-card">
+                        <div class="card-header collapsible" data-collapse="leverage">
+                            <h3>⚡ Nauka dźwigni (Paper)</h3>
+                            <span class="collapse-icon">▼</span>
+                        </div>
+                        <div class="card-body scrollable" id="leverage-body">
+                            <div id="leverage-stats" class="quick-summary-grid"></div>
+                            <h4 class="sub-header">Otwarte pozycje</h4>
+                            <div id="leverage-open-positions" class="stack-list compact"></div>
+                            <h4 class="sub-header">Ostatnie zamkniete</h4>
+                            <div id="leverage-closed-trades" class="stack-list compact"></div>
                         </div>
                     </div>
                 </div>
@@ -541,7 +557,7 @@
                     <!-- API Keys Management -->
                     <div class="card api-keys-card">
                         <div class="card-header">
-                            <h3>Klucze API Binance</h3>
+                            <h3>Klucze API Giełd</h3>
                             <button id="add-api-key-btn" class="small-btn">+ Dodaj klucz</button>
                         </div>
                         <div class="card-body">
@@ -564,6 +580,10 @@
                                     </div>
                                 </div>
                                 <div class="form-row inline">
+                                    <select id="api-exchange" class="small-select" title="Giełda">
+                                        <option value="binance">Binance</option>
+                                        <option value="bybit">Bybit</option>
+                                    </select>
                                     <label class="checkbox-label">
                                         <input type="checkbox" id="api-testnet">
                                         <span>Testnet</span>
@@ -596,6 +616,29 @@
                             <div id="binance-portfolio-value" class="portfolio-value-display hidden">
                                 <span class="label">Wartość portfela:</span>
                                 <strong class="value">-</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bybit Account Info -->
+                    <div class="card bybit-account-card">
+                        <div class="card-header">
+                            <h3>Konto Bybit <span class="badge-leverage">Dźwignia</span></h3>
+                            <select id="bybit-key-selector" class="small-select" title="Wybierz klucz API Bybit">
+                                <option value="">Wybierz klucz API</option>
+                            </select>
+                        </div>
+                        <div class="card-body">
+                            <div id="bybit-balances" class="binance-balances">
+                                <p class="empty-state">Wybierz klucz API aby zobaczyć balans Bybit</p>
+                            </div>
+                            <div id="bybit-portfolio-value" class="portfolio-value-display hidden">
+                                <span class="label">Wartość portfela:</span>
+                                <strong class="value">-</strong>
+                            </div>
+                            <div id="bybit-positions" class="bybit-positions hidden">
+                                <h4>Otwarte pozycje (perpetual)</h4>
+                                <div id="bybit-positions-list"></div>
                             </div>
                         </div>
                     </div>

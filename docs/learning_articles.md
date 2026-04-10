@@ -56,6 +56,46 @@ Punktem tej listy nie jest kopiowanie cudzych strategii, tylko zbudowanie progra
 - Link: https://www.binance.com/en/academy/articles/a-guide-to-the-most-common-technical-indicators
 - Wniosek dla agenta: EMA20 i EMA50 sa dobrym filtrem trendu, ale nie powinny byc jedynym triggerem wejscia.
 
+---
+
+# Materialy do nauki dzwigni (Leverage / Perpetual)
+
+## 10. Kontrakty perpetual: jak dzialaja
+
+- Zrodlo: Bybit Learn
+- Link: https://learn.bybit.com/trading/what-are-perpetual-contracts/
+- Wniosek dla agenta: perpetuale to instrumenty bez daty wygasniecia z funding rate co 8h. Pozwalaja na LONG i SHORT z dzwignia. Agent musi rozumiec ze dzwignia mnozy zysk I strate.
+
+## 11. Dzwignia finansowa: jak dobrac poziom
+
+- Zrodlo: Bybit Learn
+- Link: https://learn.bybit.com/trading/what-is-leverage-in-trading/
+- Wniosek dla agenta: zaczynaj od 2-3x, zwieksaj dopiero po serii wygranych. 10x+ to awansowany poziom wymagajacy strict stop-lossow. Przy 100x nawet 1% ruchu = likwidacja.
+
+## 12. Funding rate: ukryty koszt trzymania
+
+- Zrodlo: Binance Academy
+- Link: https://www.binance.com/en/academy/articles/what-are-perpetual-futures-contracts
+- Wniosek dla agenta: pozytywny FR = longi placa shortom (rynek przegrzany). Negatywny FR = shorty placa longom (oversold). Agent powinien uwzglednic FR w timing wejscia.
+
+## 13. Likwidacja pozycji: jak sie chronic
+
+- Zrodlo: Bybit Learn
+- Link: https://learn.bybit.com/trading/what-is-liquidation-in-trading/
+- Wniosek dla agenta: uzywaj isolated margin (nie cross!), stop-loss MUSI byc dalej od wejscia niz liq price. Liq distance = ~1/leverage (np. 10x = liq 10% od wejscia).
+
+## 14. Short selling: zarabianie na spadkach
+
+- Zrodlo: Investopedia
+- Link: https://www.investopedia.com/terms/s/shortselling.asp
+- Wniosek dla agenta: SHORT przy RSI > 70, MACD bearish, trend DOWN. Zamykaj SHORT przy RSI < 35 lub dywergencji byczej. UWAGA na short squeeze - nagly skok ceny.
+
+## 15. Position sizing z dzwignia
+
+- Zrodlo: Binance Academy
+- Link: https://www.binance.com/en/academy/articles/a-complete-guide-to-cryptocurrency-trading-for-beginners
+- Wniosek dla agenta: regula = kapital * max_risk% / (stop_loss% * leverage). Przy 10x i 2% SL, max risk 1% = pozycja = 50% konta. Agent nie moze overleverage.
+
 ## 10. Dziennik tradingowy i retrospektywa
 
 - Zrodlo: Coinbase Learn

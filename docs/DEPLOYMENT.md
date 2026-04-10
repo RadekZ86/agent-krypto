@@ -97,6 +97,68 @@ ssh MagicParty@s84.mydevil.net "cat /tmp/uvicorn_agentkrypto.log | tail -50"
 ssh MagicParty@s84.mydevil.net "curl -s http://127.0.0.1:12345/"
 ```
 
+## Połączenie z Bybit API
+
+### 1. Utwórz klucz API na Bybit
+
+1. Zaloguj się na **https://www.bybit.com** (lub **https://testnet.bybit.com** dla testnet)
+2. Przejdź do: **Konto → API Management → Utwórz nowy klucz**
+3. Typ klucza: **System-generated API Keys**
+4. Uprawnienia — zaznacz:
+   - ✅ **Read** — odczyt portfela i pozycji
+   - ✅ **Trade** — składanie zleceń (spot + derivatives)
+   - ✅ **Position** — zarządzanie pozycjami perpetual (dźwignia)
+5. Ogranicz dostęp IP (opcjonalnie, ale zalecane)
+6. Zapisz **API Key** i **API Secret** — secret wyświetla się tylko raz!
+
+### 2. Dodaj klucz w Agent Krypto
+
+1. Otwórz aplikację: **http://agentkrypto.magicparty.usermd.net**
+2. Zaloguj się na swoje konto
+3. Przejdź do **Status** (ikona zębatki w sidebar)
+4. W sekcji **Klucze API** kliknij **Dodaj klucz API**
+5. Wybierz giełdę: **Bybit**
+6. Wklej **API Key** i **API Secret**
+7. Zaznacz **Testnet** jeśli używasz konta testowego
+8. Kliknij **Testuj połączenie** — powinno wyświetlić uprawnienia klucza
+9. Zapisz klucz
+
+### 3. Testnet vs Mainnet
+
+| | Testnet | Mainnet |
+|---|---|---|
+| **URL API** | `api-testnet.bybit.com` | `api.bybit.com` |
+| **Rejestracja** | https://testnet.bybit.com | https://www.bybit.com |
+| **Środki** | Wirtualne (darmowe) | Prawdziwe |
+| **Do czego** | Nauka, testy | Trading na żywo |
+
+> **Zalecenie:** Zacznij od **Testnet** — dostaniesz wirtualne USDT do testów bez ryzyka.
+
+### 4. Dostępne endpointy API w Agent Krypto
+
+| Endpoint | Opis |
+|---|---|
+| `GET /api/bybit/test?key_id=N` | Test połączenia z Bybit |
+| `GET /api/bybit/portfolio?key_id=N` | Portfel (saldo, equity, P&L) |
+| `GET /api/bybit/positions?key_id=N` | Otwarte pozycje perpetual |
+| `GET /api/bybit/leverage/{symbol}?key_id=N` | Aktualny poziom dźwigni |
+| `POST /api/bybit/leverage/{symbol}?key_id=N` | Zmień dźwignię (body: `{"leverage": 5}`) |
+| `POST /api/bybit/trade?key_id=N` | Złóż zlecenie (body: symbol, side, qty, leverage) |
+| `GET /api/bybit/orders?key_id=N` | Otwarte zlecenia |
+| `GET /api/bybit/history?key_id=N` | Historia transakcji (50 ostatnich) |
+| `GET /api/leverage/snapshot` | Stan paper tradingu z dźwignią (bez klucza) |
+
+### 5. Paper trading z dźwignią
+
+Agent automatycznie uczy się dźwigni na wirtualnym kapitale ($10,000 USDT):
+- **Dźwignia startowa:** 2x — rośnie z kolejnymi wygranymi (max 10x)
+- **Max pozycji:** 3 jednocześnie (LONG + SHORT)
+- **Funding rate:** symulowany 0.01% co 8h
+- **Likwidacja:** symulowana (izolowany margin)
+- **Próg wejścia:** min 7 punktów sygnałów (wyższy niż spot)
+
+Dane dostępne w zakładce **Portfel** → karta **Nauka dźwigni (Paper)**.
+
 ## Sekrety GitHub (już skonfigurowane)
 
 - `SSH_USER`: MagicParty

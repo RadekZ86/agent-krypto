@@ -218,6 +218,32 @@ class AuditLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class LeverageSimTrade(Base):
+    """Paper-traded leverage (perpetual) position for agent learning."""
+    __tablename__ = "leverage_sim_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    side: Mapped[str] = mapped_column(String(8))                # LONG / SHORT
+    leverage: Mapped[float] = mapped_column(Float, default=2.0)
+    entry_price: Mapped[float] = mapped_column(Float)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quantity: Mapped[float] = mapped_column(Float)               # notional qty in base asset
+    margin_used: Mapped[float] = mapped_column(Float)            # actual USDT collateral
+    liquidation_price: Mapped[float] = mapped_column(Float)
+    take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    funding_fees: Mapped[float] = mapped_column(Float, default=0.0)  # accumulated 8h fees
+    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # realized P&L after close
+    pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="OPEN", index=True)  # OPEN / CLOSED / LIQUIDATED
+    close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)  # tp/sl/signal/liquidation/manual
+    decision_score: Mapped[int] = mapped_column(Integer, default=0)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class FailedLoginAttempt(Base):
     """Track failed login attempts for account lockout."""
     __tablename__ = "failed_login_attempts"
