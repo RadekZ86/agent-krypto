@@ -942,7 +942,7 @@ function paintWallet(wallet, binanceWallet, liveStats, bybitWallet) {
         }
 
         // Relabel mobile hero stats for LIVE
-        const heroBalanceLabel = document.querySelector(".mobile-hero-main .mobile-hero-label");
+        const heroBalanceLabel = document.querySelector(".mobile-hero-top .mobile-hero-top-label");
         if (heroBalanceLabel) heroBalanceLabel.textContent = "Portfel Binance";
 
         const heroStatDivs = document.querySelectorAll(".mobile-hero-stat");
@@ -3351,6 +3351,36 @@ const mobileSchedBtn = document.getElementById("mobile-scheduler-btn");
 if (mobileSchedBtn) {
     mobileSchedBtn.addEventListener("click", async () => {
         try { await toggleScheduler(); } catch(e) { setStatus(e.message); }
+    });
+}
+
+// Mobile more menu (bottom sheet)
+const mobileMoreMenu = document.getElementById("mobile-more-menu");
+const mobileMoreBtn = document.getElementById("mobile-more-btn");
+if (mobileMoreMenu && mobileMoreBtn) {
+    mobileMoreBtn.addEventListener("click", () => {
+        mobileMoreMenu.classList.remove("hidden");
+    });
+    const backdrop = mobileMoreMenu.querySelector(".mobile-more-backdrop");
+    if (backdrop) {
+        backdrop.addEventListener("click", () => {
+            mobileMoreMenu.classList.add("hidden");
+        });
+    }
+    mobileMoreMenu.querySelectorAll(".mobile-more-item[data-view]").forEach(item => {
+        item.addEventListener("click", () => {
+            mobileMoreMenu.classList.add("hidden");
+            switchView(item.dataset.view);
+        });
+    });
+}
+
+// Mobile AI brief button
+const mobileAiBriefBtn = document.getElementById("mobile-ai-brief-btn");
+if (mobileAiBriefBtn) {
+    mobileAiBriefBtn.addEventListener("click", async () => {
+        switchView("ai");
+        try { await loadAiInsightToChat(); } catch(e) { setStatus(e.message); }
     });
 }
 
