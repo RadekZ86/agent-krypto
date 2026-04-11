@@ -451,6 +451,11 @@ class AgentCycle:
                 perp_data_map = {}
             results: list[dict[str, object]] = []
 
+            # Fetch backtest rankings for decision engine
+            from app.services.backtest import BacktestService
+            _backtest_svc = BacktestService()
+            _bt_rankings = _backtest_svc.get_rankings(session)
+
             for symbol in symbols_to_process:
                 market_snapshot = self.market_data.update_symbol(session, symbol)
                 session.flush()
@@ -458,7 +463,7 @@ class AgentCycle:
                 if feature_row is None:
                     continue
 
-                decision = self.decision_engine.evaluate(session, symbol, feature_row)
+                decision = self.decision_engine.evaluate(session, symbol, feature_row, backtest_rankings=_bt_rankings)
                 execution = self.wallet.execute_decision(session, decision, float(feature_row["close"]))
 
                 # Log whale alerts if significant

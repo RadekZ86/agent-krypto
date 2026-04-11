@@ -305,11 +305,12 @@ def dashboard(request: Request) -> JSONResponse:
 
 
 @app.get("/api/chart-package")
-def chart_package(symbol: str) -> JSONResponse:
+def chart_package(symbol: str, limit: int = 120) -> JSONResponse:
     if symbol not in settings.tracked_symbols:
         raise HTTPException(status_code=404, detail=f"Nieznany symbol: {symbol}")
+    limit = min(max(limit, 10), 300)
     with SessionLocal() as session:
-        payload = learning_center.build_chart_package(session, symbol)
+        payload = learning_center.build_chart_package(session, symbol, limit=limit)
     if payload is None:
         raise HTTPException(status_code=404, detail=f"Brak danych wykresu dla {symbol}")
     return JSONResponse(payload, headers=no_cache_headers())
@@ -944,6 +945,21 @@ def _build_dashboard_payload(
             row["premium_pct"] = perp.get("premium_pct", 0)
         market_rows.append(row)
 
+    # Stale data detection: warn if latest data is older than 5 minutes
+    _stale_symbols: list[str] = []
+    _now = datetime.utcnow()
+    for mr in market_rows:
+        try:
+            ts = mr.get("timestamp", "")
+            if isinstance(ts, str) and ts:
+                _clean = ts.replace("Z", "").replace("+00:00", "")
+                _parsed = datetime.fromisoformat(_clean)
+                if (_now - _parsed).total_seconds() > 300:
+                    _stale_symbols.append(mr["symbol"])
+        except Exception:
+            pass
+    _data_stale = len(_stale_symbols) > 0
+
     resolved_chart_focus_symbol = chart_focus_symbol if chart_focus_symbol in settings.tracked_symbols else None
     if resolved_chart_focus_symbol is None and market_rows:
         resolved_chart_focus_symbol = str(market_rows[0]["symbol"])
@@ -1005,6 +1021,8 @@ def _build_dashboard_payload(
         "preferred_trade_quotes": settings.preferred_trade_quotes,
         "live_alloc_mode": user_alloc_mode,
         "live_alloc_value": user_alloc_value,
+        "data_stale": _data_stale,
+        "stale_symbols": _stale_symbols,
     }
 
     private_learning = None

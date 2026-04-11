@@ -131,9 +131,9 @@ class AIAdvisor:
         )
 
         try:
-            response = client.responses.create(
+            response = client.chat.completions.create(
                 model=settings.openai_model,
-                input=prompt,
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )
         except Exception:
@@ -142,10 +142,10 @@ class AIAdvisor:
                 "message": "Nie udalo sie pobrac odpowiedzi z OpenAI. Sprawdz klucz API, limit konta albo polaczenie sieciowe.",
             }
 
-        message = response.output_text.strip()
+        message = (response.choices[0].message.content or "").strip()
         usage = getattr(response, "usage", None)
-        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
         total_tokens = int(getattr(usage, "total_tokens", input_tokens + output_tokens) or (input_tokens + output_tokens))
         estimated_cost = ((input_tokens / 1_000_000) * settings.openai_input_cost_per_million) + ((output_tokens / 1_000_000) * settings.openai_output_cost_per_million)
 

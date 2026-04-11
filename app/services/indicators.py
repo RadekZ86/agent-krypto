@@ -31,6 +31,13 @@ class IndicatorService:
         latest = df.iloc[-1]
         previous = df.iloc[-2] if len(df) > 1 else latest
         prev2 = df.iloc[-3] if len(df) > 2 else previous
+
+        # Reject if critical indicators are NaN (means not enough data for meaningful analysis)
+        _critical = ["rsi", "macd", "macd_signal", "ema20", "ema50"]
+        _nan_count = sum(1 for c in _critical if _isnan(latest.get(c, float("nan"))))
+        if _nan_count >= 3:
+            return None
+
         trend = str(latest["trend"])
         probabilities = self.probability_engine.estimate(latest, previous)
 

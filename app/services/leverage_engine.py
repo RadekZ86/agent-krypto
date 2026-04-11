@@ -508,6 +508,22 @@ class LeverageEngine:
             trade.entry_price, exit_price, pnl, pnl_pct, reason, trade.funding_fees,
         )
 
+        # Feed result to learning system
+        try:
+            from app.services.learning import LearningService
+            learning = LearningService()
+            _result = "WIN" if pnl > 0 else "LOSS"
+            learning.log_live_trade_result(
+                session,
+                symbol=trade.symbol,
+                result=_result,
+                profit_pct=round(pnl_pct, 2),
+                market_state=f"leverage_{trade.side}_{trade.leverage}x",
+                notes=f"reason={reason} entry={trade.entry_price:.2f} exit={exit_price:.2f} funding={trade.funding_fees:.4f}",
+            )
+        except Exception:
+            _log.debug("Could not log leverage trade to learning system", exc_info=True)
+
         return {
             "action": f"CLOSE_{trade.side}",
             "symbol": trade.symbol,

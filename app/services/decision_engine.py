@@ -15,7 +15,7 @@ class DecisionEngine:
     def __init__(self) -> None:
         self.runtime_state = RuntimeStateService()
 
-    def evaluate(self, session: Session, symbol: str, feature_row: dict[str, float | str]) -> Decision:
+    def evaluate(self, session: Session, symbol: str, feature_row: dict[str, float | str], backtest_rankings: dict | None = None) -> Decision:
         profile = self.runtime_state.get_active_profile(session)
         reasons: list[str] = []
         decision_value = "HOLD"
@@ -151,10 +151,10 @@ class DecisionEngine:
         vol_ratio_val = float(feature_row.get("vol_ratio", 1))
         obv_divergence = str(feature_row.get("obv_divergence", "NONE"))
 
-        if whale_signal == "WHALE_BUY":
+        if whale_signal == "WHALE_BUY" and whale_score >= 5.0:
             buy_score += 3
             buy_signals.append(f"🐋 Wieloryb kupuje! Score={whale_score:.1f}, wolumen {vol_ratio_val:.1f}x sredniej")
-        elif whale_signal == "WHALE_ACCUMULATE":
+        elif whale_signal == "WHALE_ACCUMULATE" and whale_score >= 4.0:
             buy_score += 2
             buy_signals.append(f"🐋 Akumulacja wieloryba: duzy wolumen bez ruchu ceny (score={whale_score:.1f})")
         elif whale_signal == "SPIKE_UP":
@@ -164,7 +164,7 @@ class DecisionEngine:
             buy_score += 1
             buy_signals.append(f"Wysoki wolumen: {vol_ratio_val:.1f}x sredniej")
 
-        if whale_signal == "WHALE_SELL":
+        if whale_signal == "WHALE_SELL" and whale_score >= 5.0:
             buy_score -= 3
             buy_signals.append(f"🐋 UWAGA: Wieloryb sprzedaje! Score={whale_score:.1f} (kara -3)")
         elif whale_signal == "SPIKE_DOWN":
@@ -190,6 +190,20 @@ class DecisionEngine:
         knowledge_score, knowledge_reasons = self._apply_knowledge_playbooks(feature_row)
         buy_score += knowledge_score
         buy_signals.extend(knowledge_reasons)
+
+        # ── Backtest ranking penalty ──
+        if backtest_rankings and backtest_rankings.get("rankings"):
+            _bt_neg_count = 0
+            _bt_total = 0
+            for strat in backtest_rankings["rankings"]:
+                for sym_row in strat.get("top_symbols", []):
+                    if sym_row.get("symbol") == symbol:
+                        _bt_total += 1
+                        if sym_row["roi"] < -5:
+                            _bt_neg_count += 1
+            if _bt_total > 0 and _bt_neg_count == _bt_total:
+                buy_score -= 2
+                buy_signals.append(f"UWAGA: Backtest ujemny ROI we wszystkich strategiach (kara -2)")
 
         # ── Check for open trade (SELL logic) ──
         open_trade = session.execute(
@@ -274,7 +288,7 @@ class DecisionEngine:
                 sell_reasons.append(f"Rotacja po {hold_hours:.0f}h")
 
             # 12. WHALE SELL SIGNALS
-            if whale_signal == "WHALE_SELL":
+            if whale_signal == "WHALE_SELL" and whale_score >= 5.0:
                 sell_score += 3
                 sell_reasons.append(f"🐋 Wieloryb sprzedaje! Score={whale_score:.1f} - zagrozenie spadkiem")
             elif whale_signal == "SPIKE_DOWN":
@@ -284,7 +298,7 @@ class DecisionEngine:
                 sell_score += 2
                 sell_reasons.append("OBV dywergencja: smart money wychodzi z pozycji")
             # Whale buy while holding = hold longer (negative sell pressure)
-            if whale_signal == "WHALE_BUY":
+            if whale_signal == "WHALE_BUY" and whale_score >= 5.0:
                 sell_score -= 2
                 sell_reasons.append(f"🐋 Wieloryb kupuje - trzymaj pozycje (bonus -2 do sell)")
 
@@ -298,8 +312,10 @@ class DecisionEngine:
         else:
             # ── BUY DECISION: require multi-indicator confluence ──
             buy_threshold = int(profile["buy_score_threshold"]) if learning_mode else 6
-            # Require minimum 3 different confirming signals
-            if buy_score >= buy_threshold and len([s for s in buy_signals if "kara" not in s.lower() and "uwaga" not in s.lower()]) >= 3:
+            # Require minimum 3 different confirming (non-penalty) signals
+            positive_signals = [s for s in buy_signals if "kara" not in s.lower() and "uwaga" not in s.lower()]
+            # Use net buy_score for threshold but require enough positive signals
+            if buy_score >= buy_threshold and len(positive_signals) >= 3:
                 decision_value = "BUY"
                 confidence = min(0.95, 0.40 + buy_score * 0.04 + max(up_probability - 50, 0) / 100)
                 reasons = buy_signals
@@ -335,13 +351,25 @@ class DecisionEngine:
     def _daily_trade_count(self, session: Session) -> int:
         start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = start_of_day + timedelta(days=1)
-        result = session.execute(
+        paper_count = session.execute(
             select(func.count(SimulatedTrade.id)).where(
                 SimulatedTrade.opened_at >= start_of_day,
                 SimulatedTrade.opened_at < end_of_day,
             )
         ).scalar_one()
-        return int(result)
+        # Also count LIVE buy orders to prevent over-trading
+        try:
+            from app.models import LiveOrderLog
+            live_count = session.execute(
+                select(func.count(LiveOrderLog.id)).where(
+                    LiveOrderLog.created_at >= start_of_day,
+                    LiveOrderLog.created_at < end_of_day,
+                    LiveOrderLog.action == "BUY",
+                )
+            ).scalar_one()
+        except Exception:
+            live_count = 0
+        return int(paper_count) + int(live_count)
 
     def _learning_experiment(self, symbol: str, feature_row: dict[str, float | str], score: int, profile: dict[str, object]) -> dict[str, float | str] | None:
         up_probability = float(feature_row.get("up_probability", 50.0))

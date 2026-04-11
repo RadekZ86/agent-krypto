@@ -983,6 +983,8 @@ function paintModeStrip(systemStatus, config, wallet) {
     const schedulerTone = schedulerHealth === "active" ? "buy" : schedulerHealth === "stale" ? "sell" : "sell";
     const paperMode = (config?.trading_mode || systemStatus?.trading_mode || "PAPER") === "PAPER";
     const dataSources = (systemStatus?.data_sources || []).join(", ");
+    const dataStale = systemStatus?.data_stale || false;
+    const staleSymbols = systemStatus?.stale_symbols || [];
     const preferredQuotes = (systemStatus?.preferred_trade_quotes || []).join(" / ");
     const lastClosed = wallet?.last_closed_trade;
     const lastClosedMarkup = lastClosed
@@ -994,6 +996,7 @@ function paintModeStrip(systemStatus, config, wallet) {
             <span class="status-pill ${paperMode ? "hold" : "sell"}">${paperMode ? "TRYB PAPER" : "TRYB LIVE"}</span>
             <span class="status-pill ${schedulerTone}">${schedulerLabel}</span>
             <span class="status-pill neutral">DANE: ${dataSources || "brak"}</span>
+            ${dataStale ? `<span class="status-pill sell" title="${staleSymbols.join(', ')}">⚠ STALE DATA (${staleSymbols.length} sym)</span>` : ""}
         </div>
         <div class="mode-strip-copy">
             <strong>${paperMode ? "To juz dziala na zywych danych rynkowych, ale handluje tylko wirtualnym kapitalem." : "System jest gotowy do realnych zlecen."}</strong>
