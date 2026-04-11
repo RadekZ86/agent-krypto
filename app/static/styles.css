@@ -26,6 +26,14 @@
     box-sizing: border-box;
 }
 
+/* ---- Global mobile tap fix: eliminate 300ms delay ---- */
+button, a, [role="button"], input, select, textarea,
+.nav-item, .mobile-nav-item, .mobile-pill-btn, .mobile-more-item,
+.switcher-button, .chat-quick-btn, .header-btn, .card-header {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
 html {
     scroll-behavior: smooth;
 }
@@ -956,8 +964,8 @@ body.app-mode {
     right: 0;
     background: #0b0e11;
     border-top: 1px solid rgba(255,255,255,0.06);
-    padding: 4px 0 2px;
-    padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 0 4px;
+    padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
     z-index: 100;
 }
 
@@ -971,40 +979,64 @@ body.app-mode {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
-    padding: 6px 14px;
+    gap: 3px;
+    padding: 8px 16px;
+    min-height: 48px;
+    min-width: 48px;
     border: none;
     background: transparent;
-    color: #848e9c;
+    color: #5e6673;
     cursor: pointer;
     border-radius: 0;
-    transition: color 150ms ease;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+    position: relative;
 }
 
 .mobile-nav-item svg {
     width: 22px;
     height: 22px;
+    transition: none;
 }
 
 .mobile-nav-item span {
     font-size: 0.62rem;
     font-weight: 500;
     letter-spacing: 0.01em;
+    transition: none;
 }
 
 .mobile-nav-item.active {
     color: #f0b90b;
 }
 
+.mobile-nav-item.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 2px;
+    background: #f0b90b;
+    border-radius: 0 0 2px 2px;
+}
+
 .mobile-nav-item:active {
     color: #f0b90b;
+    opacity: 0.8;
 }
 
 /* Center "Trade" button - elevated circle */
 .mobile-nav-center {
     position: relative;
     margin-top: -18px;
+}
+
+.mobile-nav-center::before {
+    display: none;
 }
 
 .mobile-nav-center-icon {
@@ -1076,13 +1108,17 @@ body.app-mode {
     flex-direction: column;
     align-items: center;
     gap: 8px;
-    padding: 14px 8px;
+    padding: 16px 8px;
+    min-height: 48px;
     border-radius: 12px;
     border: none;
     background: rgba(255,255,255,0.04);
     color: #eaecef;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
 }
 .mobile-more-item svg {
     width: 24px;
@@ -1107,17 +1143,18 @@ body.app-mode {
         --m-bg: #0b0e11;
         --m-bg-alt: #1e2329;
         --m-bg-card: #181a20;
-        --m-line: rgba(255,255,255,0.06);
+        --m-line: rgba(255,255,255,0.05);
         --m-text: #eaecef;
         --m-text-dim: #848e9c;
         --m-accent: #f0b90b;
-        --m-positive: #0ecb81;
+        --m-positive: #02c076;
         --m-negative: #f6465d;
     }
 
     body {
         font-size: 15px;
         background: var(--m-bg);
+        -webkit-text-size-adjust: 100%;
     }
 
     body.app-mode {
@@ -1165,13 +1202,14 @@ body.app-mode {
 
     .header-btn {
         padding: 8px;
-        min-height: 36px;
-        min-width: 36px;
+        min-height: 40px;
+        min-width: 40px;
         justify-content: center;
         border-radius: 50%;
         background: transparent;
         border: none;
         color: var(--m-text-dim);
+        touch-action: manipulation;
     }
 
     .header-btn:active {
@@ -1202,8 +1240,8 @@ body.app-mode {
     }
 
     .view-content {
-        padding: 12px 16px;
-        padding-bottom: calc(12px + 72px);
+        padding: 12px 14px;
+        padding-bottom: calc(12px + 76px);
         gap: 12px;
         background: var(--m-bg);
     }
@@ -1212,10 +1250,10 @@ body.app-mode {
     .mobile-hero {
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: 14px;
         padding: 20px;
-        background: linear-gradient(145deg, #1e2329 0%, #181a20 100%);
-        border: none;
+        background: linear-gradient(145deg, #1a1e24 0%, #14171c 100%);
+        border: 1px solid rgba(255,255,255,0.04);
         border-radius: 16px;
         position: relative;
         overflow: hidden;
@@ -1228,7 +1266,7 @@ body.app-mode {
         right: -20%;
         width: 180px;
         height: 180px;
-        background: radial-gradient(circle, rgba(240,185,11,0.08) 0%, transparent 70%);
+        background: radial-gradient(circle, rgba(240,185,11,0.06) 0%, transparent 70%);
         pointer-events: none;
     }
 
@@ -1250,9 +1288,20 @@ body.app-mode {
         background: transparent;
         border: none;
         color: var(--m-text-dim);
-        padding: 4px;
+        padding: 6px;
+        min-height: 36px;
+        min-width: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        border-radius: 8px;
+    }
+
+    .mobile-hero-more:active {
+        background: rgba(255,255,255,0.06);
     }
 
     .mobile-hero-more svg {
@@ -1275,9 +1324,9 @@ body.app-mode {
     }
 
     .mobile-hero-value {
-        font-size: 2.2rem;
+        font-size: 2rem;
         font-weight: 700;
-        color: var(--m-text);
+        color: #ffffff;
         letter-spacing: -0.02em;
         font-variant-numeric: tabular-nums;
     }
@@ -1302,7 +1351,7 @@ body.app-mode {
     }
 
     .mobile-hero-stat strong {
-        font-size: 1rem;
+        font-size: 0.95rem;
         font-weight: 600;
         color: var(--m-text);
         font-variant-numeric: tabular-nums;
@@ -1315,22 +1364,26 @@ body.app-mode {
     .mobile-hero-actions {
         display: flex;
         gap: 8px;
+        margin-top: 4px;
     }
 
     .mobile-pill-btn {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 16px;
+        padding: 10px 18px;
+        min-height: 40px;
         border-radius: 20px;
         border: none;
-        background: rgba(240,185,11,0.1);
+        background: rgba(240,185,11,0.12);
         color: var(--m-accent);
         font-size: 0.78rem;
         font-weight: 600;
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
-        transition: background 120ms ease;
+        touch-action: manipulation;
+        -webkit-user-select: none;
+        user-select: none;
     }
 
     .mobile-pill-btn svg {
@@ -1339,7 +1392,7 @@ body.app-mode {
     }
 
     .mobile-pill-btn:active {
-        background: rgba(240,185,11,0.2);
+        background: rgba(240,185,11,0.24);
     }
 
     .mobile-pill-btn.secondary {
@@ -1348,7 +1401,7 @@ body.app-mode {
     }
 
     .mobile-pill-btn.secondary:active {
-        background: rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.12);
     }
 
     /* ---- METRICS: horizontal scroll strip ---- */
@@ -1370,7 +1423,7 @@ body.app-mode {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 14px;
+        padding: 10px 14px;
         border-radius: 10px;
         background: var(--m-bg-card);
         border: 1px solid var(--m-line);
@@ -1424,6 +1477,7 @@ body.app-mode {
         border: 1px solid var(--m-line);
         background: var(--m-bg-card);
         overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
 
     .card-header {
@@ -1441,12 +1495,15 @@ body.app-mode {
 
     .card-body {
         padding: 14px 16px;
+        color: var(--m-text-dim);
     }
 
     /* ---- ACCORDION for dashboard cards ---- */
     .dashboard-grid .card > .card-header {
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        -webkit-user-select: none;
         user-select: none;
         min-height: 50px;
         display: flex;
@@ -1495,11 +1552,13 @@ body.app-mode {
         background: var(--m-bg-alt);
         border: 1px solid var(--m-line);
         color: var(--m-text-dim);
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
     }
 
     .switcher-button.active {
         background: rgba(240,185,11,0.12);
-        border-color: var(--m-accent);
+        border-color: rgba(240,185,11,0.3);
         color: var(--m-accent);
     }
 
@@ -1559,15 +1618,19 @@ body.app-mode {
     }
     .chat-quick-btn {
         font-size: 0.72rem;
-        padding: 6px 12px;
+        padding: 8px 14px;
+        min-height: 36px;
         border-radius: 16px;
         background: var(--m-bg-alt);
         border: 1px solid var(--m-line);
         color: var(--m-text);
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
     }
     .chat-quick-btn:active {
-        background: rgba(240,185,11,0.1);
+        background: rgba(240,185,11,0.12);
         color: var(--m-accent);
+        border-color: rgba(240,185,11,0.3);
     }
 
     /* ---- VIEW TOOLBAR ---- */
@@ -1602,10 +1665,15 @@ body.app-mode {
 
     /* ---- WATCHLIST: Bybit coin-row style ---- */
     .watchlist-row {
-        padding: 12px 14px;
+        padding: 14px;
         border-radius: 0;
         font-size: 0.88rem;
         border-bottom: 1px solid var(--m-line);
+        touch-action: manipulation;
+    }
+
+    .watchlist-row:active {
+        background: rgba(255,255,255,0.03);
     }
 
     .watchlist-row:last-child {
@@ -1615,6 +1683,7 @@ body.app-mode {
     .watchlist-symbol {
         font-size: 0.92rem;
         font-weight: 600;
+        color: #ffffff;
     }
 
     /* ---- TRADE RANKING ---- */
@@ -1636,7 +1705,7 @@ body.app-mode {
     }
 
     .quick-card {
-        padding: 12px 14px;
+        padding: 14px;
         border-radius: 10px;
         background: var(--m-bg-card);
         border: 1px solid var(--m-line);
@@ -1645,11 +1714,13 @@ body.app-mode {
     .quick-card span {
         font-size: 0.68rem;
         color: var(--m-text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
 
     .quick-card strong {
         font-size: 1rem;
-        color: var(--m-text);
+        color: #ffffff;
     }
 
     /* ---- AI message ---- */
@@ -1660,11 +1731,15 @@ body.app-mode {
 
     /* ---- FINANCE MINI CARDS ---- */
     .finance-mini-card {
-        padding: 12px;
+        padding: 14px;
         border-radius: 10px;
         background: var(--m-bg-card);
         border: 1px solid var(--m-line);
     }
+
+    /* ---- GLOBAL positive/negative text on mobile ---- */
+    .positive { color: var(--m-positive); }
+    .negative { color: var(--m-negative); }
 }
 
 /* Extra small screens (iPhone SE) */
@@ -1678,25 +1753,26 @@ body.app-mode {
     }
 
     .mobile-hero-value {
-        font-size: 1.8rem;
+        font-size: 1.7rem;
     }
 
     .mobile-hero-stat strong {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
     }
 
     .mobile-hero-row {
-        gap: 14px;
+        gap: 12px;
         flex-wrap: wrap;
     }
 
     .mobile-pill-btn {
-        padding: 6px 12px;
+        padding: 8px 12px;
         font-size: 0.72rem;
     }
 
     .mobile-nav-item {
         padding: 5px 8px;
+        min-width: 40px;
     }
 
     .mobile-nav-item svg {
@@ -1712,6 +1788,11 @@ body.app-mode {
         width: 42px;
         height: 42px;
         border-radius: 12px;
+    }
+
+    .view-content {
+        padding: 10px 10px;
+        padding-bottom: calc(12px + 76px);
     }
 }
 

@@ -3281,7 +3281,8 @@ function initViewSwitching() {
     
     // Mobile bottom nav
     document.querySelectorAll(".mobile-nav-item[data-view]").forEach(btn => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", (e) => {
+            e.preventDefault();
             switchView(btn.dataset.view);
         });
     });
@@ -3377,13 +3378,15 @@ document.getElementById("scheduler-button").addEventListener("click", async () =
 // Mobile action buttons (cycle + scheduler duplicates for mobile)
 const mobileCycleBtn = document.getElementById("mobile-cycle-btn");
 if (mobileCycleBtn) {
-    mobileCycleBtn.addEventListener("click", async () => {
+    mobileCycleBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
         try { await runCycle(); } catch(e) { setStatus(e.message); }
     });
 }
 const mobileSchedBtn = document.getElementById("mobile-scheduler-btn");
 if (mobileSchedBtn) {
-    mobileSchedBtn.addEventListener("click", async () => {
+    mobileSchedBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
         try { await toggleScheduler(); } catch(e) { setStatus(e.message); }
     });
 }
@@ -3392,17 +3395,21 @@ if (mobileSchedBtn) {
 const mobileMoreMenu = document.getElementById("mobile-more-menu");
 const mobileMoreBtn = document.getElementById("mobile-more-btn");
 if (mobileMoreMenu && mobileMoreBtn) {
-    mobileMoreBtn.addEventListener("click", () => {
+    mobileMoreBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         mobileMoreMenu.classList.remove("hidden");
     });
     const backdrop = mobileMoreMenu.querySelector(".mobile-more-backdrop");
     if (backdrop) {
-        backdrop.addEventListener("click", () => {
+        backdrop.addEventListener("click", (e) => {
+            e.preventDefault();
             mobileMoreMenu.classList.add("hidden");
         });
     }
     mobileMoreMenu.querySelectorAll(".mobile-more-item[data-view]").forEach(item => {
-        item.addEventListener("click", () => {
+        item.addEventListener("click", (e) => {
+            e.preventDefault();
             mobileMoreMenu.classList.add("hidden");
             switchView(item.dataset.view);
         });
@@ -3412,7 +3419,8 @@ if (mobileMoreMenu && mobileMoreBtn) {
 // Mobile AI brief button
 const mobileAiBriefBtn = document.getElementById("mobile-ai-brief-btn");
 if (mobileAiBriefBtn) {
-    mobileAiBriefBtn.addEventListener("click", async () => {
+    mobileAiBriefBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
         switchView("ai");
         try { await loadAiInsightToChat(); } catch(e) { setStatus(e.message); }
     });
