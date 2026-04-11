@@ -54,3 +54,11 @@ def init_db() -> None:
             if "live_alloc_value" not in columns:
                 conn.execute(sqlalchemy.text("ALTER TABLE users ADD COLUMN live_alloc_value REAL DEFAULT 10.0"))
                 conn.commit()
+        if "live_order_log" in inspector.get_table_names():
+            cols = [col["name"] for col in inspector.get_columns("live_order_log")]
+            if "commission" not in cols:
+                conn.execute(sqlalchemy.text("ALTER TABLE live_order_log ADD COLUMN commission REAL"))
+                conn.commit()
+            if "commission_asset" not in cols:
+                conn.execute(sqlalchemy.text("ALTER TABLE live_order_log ADD COLUMN commission_asset VARCHAR(16)"))
+                conn.commit()

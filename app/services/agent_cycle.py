@@ -138,9 +138,12 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "error", "detail": order["error"]})
                     session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="error", detail=str(order["error"])[:500]))
                 else:
-                    logger.info("LIVE %s: SELL %s OK orderId=%s", user.username, pair, order.get("orderId"))
+                    from app.services.binance_api import extract_commission
+                    comm, comm_asset = extract_commission(order)
+                    logger.info("LIVE %s: SELL %s OK orderId=%s fee=%.6f %s", user.username, pair, order.get("orderId"), comm, comm_asset)
                     results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "ok", "order_id": order.get("orderId")})
-                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="ok", order_id=str(order.get("orderId", ""))))
+                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="ok", order_id=str(order.get("orderId", "")),
+                                             commission=comm, commission_asset=comm_asset))
                     # Log for learning
                     try:
                         from app.services.learning import LearningService
@@ -397,6 +400,7 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
 def _place_buy_order(client, session: Session, user, pair: str, quote_asset: str, allocation: float) -> dict:
     """Place a market buy order and log the result."""
     from app.models import LiveOrderLog
+    from app.services.binance_api import extract_commission
 
     order = client.create_order(
         symbol=pair,
@@ -412,10 +416,12 @@ def _place_buy_order(client, session: Session, user, pair: str, quote_asset: str
         ))
         return {"user": user.username, "symbol": pair, "action": "BUY", "status": "error", "detail": order["error"]}
     else:
-        logger.info("LIVE %s: BUY %s OK orderId=%s alloc=%.4f %s", user.username, pair, order.get("orderId"), allocation, quote_asset)
+        comm, comm_asset = extract_commission(order)
+        logger.info("LIVE %s: BUY %s OK orderId=%s alloc=%.4f %s fee=%.6f %s", user.username, pair, order.get("orderId"), allocation, quote_asset, comm, comm_asset)
         session.add(LiveOrderLog(
             username=user.username, symbol=pair, action="BUY", status="ok",
             order_id=str(order.get("orderId", "")), allocation=allocation, quote_currency=quote_asset,
+            commission=comm, commission_asset=comm_asset,
         ))
         return {"user": user.username, "symbol": pair, "action": "BUY", "status": "ok", "order_id": order.get("orderId")}
 

@@ -417,9 +417,35 @@ async function loadBinanceBalances(keyId) {
             portfolioDisplay.querySelector('.value').textContent = 
                 `$${parseFloat(portfolioData.total_value_usdt).toFixed(2)} USDT`;
         }
+
+        // Show dust conversion button if Binance key is active
+        const dustBtn = document.getElementById('dust-convert-btn');
+        if (dustBtn) dustBtn.classList.remove('hidden');
     } catch (error) {
         if (balancesContainer) balancesContainer.innerHTML = `<p class="empty-state">Błąd: ${error.message}</p>`;
     }
+}
+
+async function convertDustToBNB() {
+    const btn = document.getElementById('dust-convert-btn');
+    const resultDiv = document.getElementById('dust-convert-result');
+    if (btn) btn.disabled = true;
+    if (btn) btn.textContent = '⏳ Konwertuję...';
+    try {
+        const res = await fetch('/api/binance/dust/convert', {method: 'POST'});
+        const data = await res.json();
+        if (resultDiv) {
+            resultDiv.classList.remove('hidden');
+            if (data.ok) {
+                resultDiv.innerHTML = `<span class="positive">✅ Zamieniono ${data.converted_count} aktywów → ${data.total_bnb.toFixed(6)} BNB</span>`;
+            } else {
+                resultDiv.innerHTML = `<span class="negative">❌ ${data.error || 'Błąd konwersji'}</span>`;
+            }
+        }
+    } catch (e) {
+        if (resultDiv) { resultDiv.classList.remove('hidden'); resultDiv.innerHTML = `<span class="negative">❌ ${e.message}</span>`; }
+    }
+    if (btn) { btn.disabled = false; btn.textContent = '🧹 Zamień resztki na BNB'; }
 }
 
 async function loadBybitData(keyId) {
@@ -1196,6 +1222,11 @@ function paintCapitalSummary(wallet, binanceWallet, liveStats, bybitWallet, bybi
         }
 
         // Binance section
+        let commissionHtml = "";
+        if (ls.total_commission) {
+            const commParts = Object.entries(ls.commission_by_asset || {}).map(([a, v]) => `${v.toFixed(4)} ${a}`).join(", ");
+            commissionHtml = buildQuickCard("Prowizje LIVE", commParts || `${ls.total_commission.toFixed(6)}`, "Realne opłaty giełdowe Binance");
+        }
         let binanceHtml = `<div class="portfolio-section-header binance">🟡 Binance</div>
             ${buildQuickCard("Portfel Binance", formatQuote(totalValue, walletQuote), "Łącznie aktywa na Binance")}
             ${buildQuickCard(cashLabel, formatQuote(cashValue, walletQuote), "Gotówka do handlu")}
@@ -1203,6 +1234,7 @@ function paintCapitalSummary(wallet, binanceWallet, liveStats, bybitWallet, bybi
             ${buildQuickCard("Kupione", `${ls.buy_count || 0}`, "Zlecenia BUY")}
             ${buildQuickCard("Sprzedane", `${ls.sell_count || 0}`, "Zlecenia SELL")}
             ${buildQuickCard("Bilans P&L", formatQuote(ls.realized_pnl || 0, walletQuote), `Win rate: ${percentFormatter.format(ls.win_rate || 0)}%`)}
+            ${commissionHtml}
             ${holdingsHtml}`;
 
         // Bybit section
@@ -1297,6 +1329,11 @@ function paintQuickSummary(wallet, binanceWallet, liveStats) {
         const cashHolding = (binanceWallet.holdings || []).find(h => h.asset === walletQuote);
         const cashValue = cashHolding ? cashHolding.free || 0 : 0;
         const ls = liveStats || {};
+        let commCard = "";
+        if (ls.total_commission) {
+            const commParts = Object.entries(ls.commission_by_asset || {}).map(([a, v]) => `${v.toFixed(4)} ${a}`).join(", ");
+            commCard = buildQuickCard("Prowizje LIVE", commParts || `${ls.total_commission.toFixed(6)}`, "Realne opłaty giełdowe Binance");
+        }
         container.innerHTML = `
             ${buildQuickCard("Portfel Binance", formatQuote(totalValue, walletQuote), "Wartosc wszystkich aktywow na koncie")}
             ${buildQuickCard(`Wolne ${walletQuote}`, formatQuote(cashValue, walletQuote), "Gotowka dostepna do handlu")}
@@ -1305,6 +1342,7 @@ function paintQuickSummary(wallet, binanceWallet, liveStats) {
             ${buildQuickCard("Zysk niezreal.", formatQuote(ls.gross_profit || 0, walletQuote), `${ls.winning_count || 0} zyskownych pozycji`)}
             ${buildQuickCard("Strata niezreal.", formatQuote(ls.gross_loss || 0, walletQuote), `${ls.losing_count || 0} stratnych pozycji`)}
             ${buildQuickCard("Bilans P&L", formatQuote(ls.realized_pnl || 0, walletQuote), `Win rate: ${percentFormatter.format(ls.win_rate || 0)}%`)}
+            ${commCard}
             ${cryptoHoldings.map(h => buildQuickCard(h.asset, `${h.total.toFixed(6)}`, formatQuote(h.value, walletQuote))).join("")}
         `;
         return;

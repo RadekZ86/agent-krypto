@@ -28,6 +28,20 @@ def _earn_to_base_asset(asset: str) -> str:
     return asset
 
 
+def extract_commission(order_response: dict) -> tuple[float, str]:
+    """Extract total commission and asset from Binance order response fills.
+    Returns (total_commission, commission_asset)."""
+    fills = order_response.get("fills", [])
+    if not fills:
+        return 0.0, ""
+    total = 0.0
+    asset = ""
+    for f in fills:
+        total += float(f.get("commission", 0))
+        asset = f.get("commissionAsset", asset)
+    return round(total, 8), asset
+
+
 class BinanceClient:
     """Binance API client for a specific user's API key."""
     
@@ -297,6 +311,26 @@ class BinanceClient:
         """Cancel all open orders for a symbol."""
         params = {"symbol": symbol}
         return self._request("DELETE", "/api/v3/openOrders", params, signed=True)
+
+    # ==================== DUST CONVERSION ====================
+
+    def get_dust_assets(self) -> list[dict]:
+        """Get list of small balances eligible for conversion to BNB.
+        Returns list of dicts with asset, amount, transferBtc, etc."""
+        resp = self._request("POST", "/sapi/v1/asset/dust-btc", {}, signed=True)
+        if isinstance(resp, dict) and "error" in resp:
+            return []
+        details = resp.get("details", [])
+        return [d for d in details if float(d.get("amount", 0)) > 0]
+
+    def convert_dust_to_bnb(self, assets: list[str]) -> dict:
+        """Convert small balances (dust) to BNB.
+        Binance endpoint: POST /sapi/v1/asset/dust
+        Returns dict with totalTransfered, transferResult list."""
+        if not assets:
+            return {"error": "Brak aktywow do konwersji"}
+        params = {"asset": ",".join(assets)}
+        return self._request("POST", "/sapi/v1/asset/dust", params, signed=True)
     
     # ==================== HELPER METHODS ====================
     

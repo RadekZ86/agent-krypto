@@ -227,6 +227,12 @@ class AIAdvisor:
                 '<!--CMD:{"action":"BUY/SELL","symbol":"SYMBOL"}-->'
             )
 
+        live_stats = dashboard.get("live_stats") or {}
+        fee_info = ""
+        if live_stats.get("total_commission"):
+            comm_parts = [f"{asset}: {amt}" for asset, amt in live_stats.get("commission_by_asset", {}).items()]
+            fee_info = f"\nProwizje LIVE lacznie: {live_stats['total_commission']} ({', '.join(comm_parts)})"
+
         system_prompt = (
             "Jestes Agent Krypto — inteligentny asystent tradingowy kryptowalutowy. "
             "Odpowiadasz po polsku, krotko i konkretnie (max 8 zdan). "
@@ -234,6 +240,7 @@ class AIAdvisor:
             "paper tradingu z dzwignia, i historii decyzji agenta. "
             "Mozesz wyjasnic dlaczego agent kupil/sprzedal dane krypto, opierajac sie na danych decyzji i wskaznikach. "
             "Masz dostep do danych dzwigni (leverage paper trading) — mozesz wyjasniac pozycje LONG/SHORT, TP/SL, funding rate. "
+            "Znasz prowizje handlowe i mozesz wyjasnic ich wplyw na zysk/strate. "
             "Jesli uzytkownik prosi o kupno/sprzedaz, mozesz to wykonac (w trybie LIVE na Binance lub Bybit). "
             "Zawsze ostrzegaj o ryzyku. Nie skladaj obietnic zysku. "
             "Jesli nie masz pewnych danych, powiedz to wprost.\n\n"
@@ -248,7 +255,8 @@ class AIAdvisor:
             f"Bybit polaczone: {system_status.get('bybit_private_ready', False)}\n"
             f"Prywatne uczenie: {dashboard.get('private_learning')}\n"
             f"Ranking trade'ow: {dashboard.get('trade_ranking')}\n"
-            f"Live stats: {dashboard.get('live_stats')}\n"
+            f"Live stats: {live_stats}\n"
+            f"{fee_info}\n"
             f"Status: {system_status}"
             f"{command_context}"
         )

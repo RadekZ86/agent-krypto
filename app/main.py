@@ -439,10 +439,13 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
 
                 result = client.create_order(symbol=pair, side="BUY", order_type="MARKET", quote_quantity=round(alloc, 6))
                 if isinstance(result, dict) and "error" not in result:
+                    from app.services.binance_api import extract_commission
+                    comm, comm_asset = extract_commission(result)
                     session.add(LiveOrderLog(
                         username=user.username, symbol=symbol, action="BUY", status="ok",
                         detail=f"Czat: kupiono za {round(alloc, 2)} {quote}",
                         order_id=str(result.get("orderId", "")), allocation=round(alloc, 4), quote_currency=quote,
+                        commission=comm, commission_asset=comm_asset,
                     ))
                     session.commit()
                     return JSONResponse({"ok": True, "detail": f"Kupiono {symbol} za {round(alloc, 2)} {quote}", "order": result})
@@ -523,6 +526,8 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
 
                 result = client.create_order(symbol=pair, side="SELL", order_type="MARKET", quantity=round(qty_floored, 8))
                 if isinstance(result, dict) and "error" not in result:
+                    from app.services.binance_api import extract_commission
+                    comm, comm_asset = extract_commission(result)
                     detail_msg = f"Czat: sprzedano {round(qty_floored, 6)} {symbol}"
                     if earn_redeemed:
                         detail_msg += " (po odkupieniu z Earn)"
@@ -530,6 +535,7 @@ async def agent_chat_execute(request: Request, body: ChatExecuteRequest, user: U
                         username=user.username, symbol=symbol, action="SELL", status="ok",
                         detail=detail_msg,
                         order_id=str(result.get("orderId", "")), allocation=round(qty_floored, 6), quote_currency=quote,
+                        commission=comm, commission_asset=comm_asset,
                     ))
                     session.commit()
                     return JSONResponse({"ok": True, "detail": f"Sprzedano {round(qty_floored, 6)} {symbol} za {quote}", "order": result})
@@ -1080,6 +1086,13 @@ def _build_dashboard_payload(
         _total_positions = _winning + _losing
         _win_rate = round(_winning / _total_positions * 100, 2) if _total_positions > 0 else 0.0
 
+        # Total commissions from LiveOrderLog
+        _total_commission = sum(o.commission or 0.0 for o in _live_orders_all if o.status == "ok" and o.commission)
+        _commission_assets: dict[str, float] = {}
+        for o in _live_orders_all:
+            if o.status == "ok" and o.commission and o.commission_asset:
+                _commission_assets[o.commission_asset] = _commission_assets.get(o.commission_asset, 0) + o.commission
+
         live_stats = {
             "buy_count": len(_ok_buys),
             "sell_count": len(_ok_sells),
@@ -1089,6 +1102,8 @@ def _build_dashboard_payload(
             "realized_pnl": round(_total_pnl, 2),
             "winning_count": _winning,
             "losing_count": _losing,
+            "total_commission": round(_total_commission, 6),
+            "commission_by_asset": {k: round(v, 6) for k, v in _commission_assets.items()},
         }
 
     return {
@@ -1490,6 +1505,42 @@ async def check_leverage(user: User = Depends(require_auth)) -> JSONResponse:
             })
         result = client.check_margin_available()
         return JSONResponse(result)
+
+
+@app.get("/api/binance/dust")
+async def get_dust_assets(user: User = Depends(require_auth)) -> JSONResponse:
+    """Get small balances eligible for conversion to BNB."""
+    with SessionLocal() as session:
+        _, client = get_user_binance_client(session, user.id)
+        if client is None:
+            return JSONResponse({"error": "Brak klucza API Binance."}, status_code=400)
+        assets = client.get_dust_assets()
+        return JSONResponse({"assets": assets})
+
+
+@app.post("/api/binance/dust/convert")
+@limiter.limit("5/minute")
+async def convert_dust(request: Request, user: User = Depends(require_auth)) -> JSONResponse:
+    """Convert small balances (dust) to BNB."""
+    with SessionLocal() as session:
+        _, client = get_user_binance_client(session, user.id)
+        if client is None:
+            return JSONResponse({"error": "Brak klucza API Binance."}, status_code=400)
+        dust_list = client.get_dust_assets()
+        if not dust_list:
+            return JSONResponse({"error": "Brak malych kwot do konwersji."}, status_code=400)
+        asset_names = [d["asset"] for d in dust_list]
+        result = client.convert_dust_to_bnb(asset_names)
+        if isinstance(result, dict) and "error" in result:
+            return JSONResponse({"error": result["error"]}, status_code=400)
+        transferred = result.get("totalTransfered", result.get("totalTransferred", 0))
+        transfer_results = result.get("transferResult", [])
+        return JSONResponse({
+            "ok": True,
+            "total_bnb": float(transferred),
+            "converted_count": len(transfer_results),
+            "details": transfer_results,
+        })
 
 
 # ============== LEVERAGE PAPER TRADING ==============

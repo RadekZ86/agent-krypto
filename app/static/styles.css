@@ -2890,6 +2890,33 @@ th {
     width: 100%;
 }
 
+#dust-convert-btn {
+    margin-top: 8px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg-alt);
+    color: var(--text);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 150ms ease;
+}
+#dust-convert-btn:hover {
+    background: var(--accent);
+    color: #0a1a22;
+}
+#dust-convert-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.dust-result {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.2);
+}
+
 .auth-switch {
     text-align: center;
     color: var(--muted);

@@ -203,6 +203,8 @@ class LiveOrderLog(Base):
     order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     allocation: Mapped[float | None] = mapped_column(Float, nullable=True)
     quote_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    commission: Mapped[float | None] = mapped_column(Float, nullable=True)
+    commission_asset: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class AuditLog(Base):
