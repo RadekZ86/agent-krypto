@@ -38,6 +38,8 @@ def build_indicator_frame(rows: list[object]) -> pd.DataFrame:
     rs = avg_gain / avg_loss.replace(0, np.nan)
     df["rsi"] = (100 - (100 / (1 + rs))).fillna(50.0)
     df["volume_change"] = df["volume"].pct_change().replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    # Smoothed volume change (3-bar EMA) — less noisy for probability engine
+    df["vol_change_smooth"] = df["volume_change"].ewm(span=3, adjust=False).mean().fillna(0.0)
 
     one_day_bars = max(1, settings.bars_per_day)
     seven_day_bars = max(1, min(len(df) - 1, 7 * settings.bars_per_day)) if len(df) > 1 else 1
@@ -52,11 +54,30 @@ def build_indicator_frame(rows: list[object]) -> pd.DataFrame:
         * 100
     )
     df["ema_gap_pct"] = (((df["ema20"] - df["ema50"]) / df["ema50"].replace(0, np.nan)).fillna(0.0) * 100)
-    df["trend"] = np.where(
-        df["ema_gap_pct"] > 0.15,
-        "UP",
-        np.where(df["ema_gap_pct"] < -0.15, "DOWN", "SIDEWAYS"),
-    )
+    # Trend classification with hysteresis to prevent thrashing:
+    # Enter UP: gap > +0.15%  |  Exit UP (to SIDEWAYS): gap < +0.05%
+    # Enter DOWN: gap < -0.15%  |  Exit DOWN (to SIDEWAYS): gap > -0.05%
+    _trend_vals = ["SIDEWAYS"] * len(df)
+    _prev_trend = "SIDEWAYS"
+    for _ti in range(len(df)):
+        _gap = df["ema_gap_pct"].iat[_ti]
+        if _prev_trend == "UP":
+            if _gap < -0.15:
+                _prev_trend = "DOWN"
+            elif _gap < 0.05:
+                _prev_trend = "SIDEWAYS"
+        elif _prev_trend == "DOWN":
+            if _gap > 0.15:
+                _prev_trend = "UP"
+            elif _gap > -0.05:
+                _prev_trend = "SIDEWAYS"
+        else:  # SIDEWAYS
+            if _gap > 0.15:
+                _prev_trend = "UP"
+            elif _gap < -0.15:
+                _prev_trend = "DOWN"
+        _trend_vals[_ti] = _prev_trend
+    df["trend"] = _trend_vals
 
     # ── Bollinger Bands (20-period SMA ± 2 std dev) ──
     df["sma20"] = df["close"].rolling(window=20, min_periods=10).mean()

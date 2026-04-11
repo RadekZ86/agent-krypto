@@ -115,19 +115,43 @@ def _classify_whale_signal(row) -> str:
 
 def detect_obv_divergence(df: pd.DataFrame) -> str:
     """Check for OBV divergence (smart money vs price).
+
+    Uses linear regression slope over recent bars for more robust detection.
+    Requires minimum magnitude threshold to avoid noise.
     Returns: 'BULLISH_DIV', 'BEARISH_DIV', or 'NONE'."""
     if len(df) < OBV_DIVERGENCE_BARS + 2 or "obv" not in df.columns:
         return "NONE"
 
     recent = df.tail(OBV_DIVERGENCE_BARS)
-    price_trend = recent["close"].iloc[-1] - recent["close"].iloc[0]
-    obv_trend = recent["obv"].iloc[-1] - recent["obv"].iloc[0]
+    prices = recent["close"].values
+    obvs = recent["obv"].values
+
+    if len(prices) < 3:
+        return "NONE"
+
+    # Linear regression slopes (more robust than start-end comparison)
+    x = np.arange(len(prices), dtype=float)
+    x_mean = x.mean()
+    price_slope = np.sum((x - x_mean) * (prices - prices.mean())) / max(np.sum((x - x_mean) ** 2), 1e-10)
+    obv_slope = np.sum((x - x_mean) * (obvs - obvs.mean())) / max(np.sum((x - x_mean) ** 2), 1e-10)
+
+    # Normalize slopes for magnitude comparison
+    avg_price = np.mean(np.abs(prices)) if np.any(prices != 0) else 1.0
+    avg_obv = np.mean(np.abs(obvs)) if np.any(obvs != 0) else 1.0
+    price_slope_norm = price_slope / avg_price if avg_price > 0 else 0
+    obv_slope_norm = obv_slope / avg_obv if avg_obv > 0 else 0
+
+    # Require minimum divergence magnitude (avoid noise)
+    MIN_SLOPE_MAGNITUDE = 0.002  # 0.2% per bar minimum
+
+    if abs(price_slope_norm) < MIN_SLOPE_MAGNITUDE and abs(obv_slope_norm) < MIN_SLOPE_MAGNITUDE:
+        return "NONE"
 
     # Price down but OBV up → smart money accumulating (bullish)
-    if price_trend < 0 and obv_trend > 0:
+    if price_slope_norm < -MIN_SLOPE_MAGNITUDE and obv_slope_norm > MIN_SLOPE_MAGNITUDE:
         return "BULLISH_DIV"
     # Price up but OBV down → smart money distributing (bearish)
-    if price_trend > 0 and obv_trend < 0:
+    if price_slope_norm > MIN_SLOPE_MAGNITUDE and obv_slope_norm < -MIN_SLOPE_MAGNITUDE:
         return "BEARISH_DIV"
 
     return "NONE"

@@ -49,102 +49,109 @@ class DecisionEngine:
         prev_macd = float(feature_row.get("prev_macd", macd))
         prev_macd_signal = float(feature_row.get("prev_macd_signal", macd_signal))
 
-        # ── BUY SIGNAL SCORING (multi-indicator confluence) ──
+        # ── BUY SIGNAL SCORING (tiered, no double-counting) ──
+        # Tier 1: TREND (max +4) — EMA alignment, golden cross
+        # Tier 2: MOMENTUM (max +5) — MACD crossover, histogram flip
+        # Tier 3: MEAN-REVERSION (max +5) — RSI extremes, Bollinger, SMA divergence
+        # Tier 4: CONFIRMATION (max +4) — volume, VWAP, probability engine
+        # Tier 5: WHALE/ANOMALY (max +5) — whale signals, OBV divergence
+        # Penalties reduce score but don't count toward confluence
         buy_score = 0
         buy_signals: list[str] = []
 
-        # 1. RSI Oversold (strongest buy signal when <30, moderate <40)
-        if rsi < 30:
-            buy_score += 3
-            buy_signals.append(f"RSI mocno wyprzedany ({rsi:.0f})")
-        elif rsi < 40:
-            buy_score += 1
-            buy_signals.append(f"RSI w strefie wyprzedania ({rsi:.0f})")
+        # ═══ TIER 1: TREND (EMA structure) ═══
+        tier1_score = 0
+        if trend == "UP":
+            tier1_score += 2
+            buy_signals.append("Trend wzrostowy EMA20 > EMA50")
+        elif close > ema20 and ema20 > ema50 * 0.998:
+            tier1_score += 1
+            buy_signals.append("EMA zbiegaja sie w gore")
+        # Golden Cross (fresh UP crossover)
+        if trend == "UP" and ema20 > ema50 and (ema20 - ema50) / ema50 < 0.005:
+            tier1_score += 2
+            buy_signals.append("Golden Cross: EMA20 wlasnie przecielo EMA50 w gore")
+        buy_score += min(tier1_score, 4)  # cap tier
 
-        # 2. MACD Bullish Crossover (MACD crosses above signal line)
+        # ═══ TIER 2: MOMENTUM (MACD) ═══
+        tier2_score = 0
         if macd > macd_signal and prev_macd <= prev_macd_signal:
-            buy_score += 3
+            tier2_score += 3
             buy_signals.append("MACD przeciecie bycze (swiezy sygnal)")
         elif macd > macd_signal:
-            buy_score += 1
+            tier2_score += 1
             buy_signals.append("MACD powyzej linii sygnalu")
-
-        # 3. MACD Histogram momentum shift (from negative to positive or rising)
         if macd_hist > 0 and prev_macd_hist <= 0:
-            buy_score += 2
+            tier2_score += 2
             buy_signals.append("Histogram MACD przeszedl na plus")
         elif macd_hist > prev_macd_hist and macd_hist > 0:
-            buy_score += 1
+            tier2_score += 1
             buy_signals.append("Histogram MACD rosnie")
+        buy_score += min(tier2_score, 5)  # cap tier
 
-        # 4. Bollinger Band Bounce (price near or below lower band)
+        # ═══ TIER 3: MEAN-REVERSION (RSI + Bollinger + SMA) ═══
+        tier3_score = 0
+        if rsi < 30:
+            tier3_score += 3
+            buy_signals.append(f"RSI mocno wyprzedany ({rsi:.0f})")
+        elif rsi < 40:
+            tier3_score += 1
+            buy_signals.append(f"RSI w strefie wyprzedania ({rsi:.0f})")
+
         if bb_lower > 0:
             bb_position = (close - bb_lower) / (bb_upper - bb_lower) if bb_upper != bb_lower else 0.5
             if bb_position <= 0.05:
-                buy_score += 3
+                tier3_score += 2
                 buy_signals.append("Cena na dolnej wstedze Bollingera (silne wyprzedanie)")
             elif bb_position <= 0.20:
-                buy_score += 2
+                tier3_score += 1
                 buy_signals.append("Cena blisko dolnej wstegi Bollingera")
 
-        # 5. Bollinger Squeeze (low volatility = breakout incoming)
         if bb_width < 2.0 and bb_width > 0:
-            buy_score += 1
+            tier3_score += 1
             buy_signals.append(f"Bollinger Squeeze: niska zmiennosc ({bb_width:.1f}%) - mozliwy breakout")
 
-        # 6. Price above VWAP (institutional support)
-        if close > vwap and vwap > 0:
-            buy_score += 1
-            buy_signals.append("Cena powyzej VWAP (wsparcie instytucjonalne)")
-
-        # 7. EMA Trend alignment (price > EMA20 > EMA50 = strong uptrend)
-        if trend == "UP":
-            buy_score += 2
-            buy_signals.append("Trend wzrostowy EMA20 > EMA50")
-        elif close > ema20 and ema20 > ema50 * 0.998:
-            buy_score += 1
-            buy_signals.append("EMA zbiegaja sie w gore")
-
-        # 8. Golden Cross detection (EMA20 crosses above EMA50)
-        if trend == "UP" and ema20 > ema50 and (ema20 - ema50) / ema50 < 0.005:
-            buy_score += 2
-            buy_signals.append("Golden Cross: EMA20 wlasnie przecielo EMA50 w gore")
-
-        # 9. Volume confirmation (require rising volume for strong signals)
-        if volume_change > 0.15:
-            buy_score += 2
-            buy_signals.append(f"Potwierdzenie wolumenem (+{volume_change*100:.0f}%)")
-        elif volume_change > 0:
-            buy_score += 1
-            buy_signals.append("Rosnacy wolumen")
-
-        # 10. Probability engine support
-        if up_probability >= 60:
-            buy_score += 2
-            buy_signals.append(f"Wysoka szansa wzrostu ({up_probability:.0f}%)")
-        elif up_probability >= 55:
-            buy_score += 1
-            buy_signals.append(f"Umiarkowana szansa wzrostu ({up_probability:.0f}%)")
-
-        if bottom_probability >= 60:
-            buy_score += 2
-            buy_signals.append(f"Sygnał dna ({bottom_probability:.0f}%)")
-
-        # 11. RSI Bullish Divergence (price makes lower low, RSI makes higher low)
+        # RSI Bullish Divergence
         prev2_close = float(feature_row.get("prev2_close", prev_close))
         prev2_rsi = float(feature_row.get("prev2_rsi", prev_rsi))
         if close < prev2_close and rsi > prev2_rsi and rsi < 45:
-            buy_score += 3
+            tier3_score += 2
             buy_signals.append("Dywergencja bycza RSI (cena spada ale momentum rosnie)")
 
-        # 12. Mean reversion from extreme (price far below SMA20)
         if sma20 > 0:
             price_vs_sma = (close - sma20) / sma20 * 100
             if price_vs_sma < -3.0:
-                buy_score += 2
+                tier3_score += 2
                 buy_signals.append(f"Odchylenie od SMA20: {price_vs_sma:.1f}% (mean reversion)")
 
-        # ── 13. WHALE / ANOMALY SIGNALS ──
+        buy_score += min(tier3_score, 5)  # cap tier
+
+        # ═══ TIER 4: CONFIRMATION (volume + VWAP + probability engine) ═══
+        # Probability engine already incorporates RSI/MACD/trend internally,
+        # so we use it as ONE consolidated signal here (not re-scoring same indicators)
+        tier4_score = 0
+        if volume_change > 0.15:
+            tier4_score += 1
+            buy_signals.append(f"Potwierdzenie wolumenem (+{volume_change*100:.0f}%)")
+
+        if close > vwap and vwap > 0:
+            tier4_score += 1
+            buy_signals.append("Cena powyzej VWAP (wsparcie instytucjonalne)")
+
+        # Probability engine — only use its STRONGEST signal (avoid stacking)
+        if up_probability >= 62 and bottom_probability >= 58:
+            tier4_score += 2
+            buy_signals.append(f"Silny sygnal prawdopodobienstwa: wzrost {up_probability:.0f}% + dno {bottom_probability:.0f}%")
+        elif up_probability >= 60:
+            tier4_score += 1
+            buy_signals.append(f"Wysoka szansa wzrostu ({up_probability:.0f}%)")
+        elif bottom_probability >= 62:
+            tier4_score += 1
+            buy_signals.append(f"Sygnal dna ({bottom_probability:.0f}%)")
+
+        buy_score += min(tier4_score, 4)  # cap tier
+
+        # ═══ TIER 5: WHALE / ANOMALY SIGNALS ═══
         whale_score = float(feature_row.get("whale_score", 0))
         whale_signal = str(feature_row.get("whale_signal", "NONE"))
         vol_zscore = float(feature_row.get("vol_zscore", 0))
@@ -310,14 +317,17 @@ class DecisionEngine:
             else:
                 reasons = ["Trzymaj pozycje: brak sygnalu sprzedazy"]
         else:
-            # ── BUY DECISION: require multi-indicator confluence ──
+            # ── BUY DECISION: require multi-tier confluence ──
             buy_threshold = int(profile["buy_score_threshold"]) if learning_mode else 6
             # Require minimum 3 different confirming (non-penalty) signals
             positive_signals = [s for s in buy_signals if "kara" not in s.lower() and "uwaga" not in s.lower()]
-            # Use net buy_score for threshold but require enough positive signals
-            if buy_score >= buy_threshold and len(positive_signals) >= 3:
+            # Count how many tiers contributed (at least 3 tiers must fire for confluence)
+            _active_tiers = sum(1 for t in [tier1_score, tier2_score, tier3_score, tier4_score] if t > 0)
+            if buy_score >= buy_threshold and len(positive_signals) >= 3 and _active_tiers >= 2:
                 decision_value = "BUY"
-                confidence = min(0.95, 0.40 + buy_score * 0.04 + max(up_probability - 50, 0) / 100)
+                # Confidence: base 35% + score contribution + tier diversity bonus + probability bonus
+                _tier_bonus = (_active_tiers - 2) * 0.04  # 0.04 per extra tier beyond minimum 2
+                confidence = min(0.92, 0.35 + buy_score * 0.035 + _tier_bonus + max(up_probability - 50, 0) / 120)
                 reasons = buy_signals
             elif exploration_mode:
                 experiment = self._learning_experiment(symbol, feature_row, buy_score, profile)
