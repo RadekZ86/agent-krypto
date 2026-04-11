@@ -970,6 +970,15 @@ def _build_dashboard_payload(
     user_trading_mode = current_user.trading_mode if current_user and hasattr(current_user, 'trading_mode') else settings.trading_mode
     user_alloc_mode = getattr(current_user, "live_alloc_mode", "percent") or "percent" if current_user else "percent"
     user_alloc_value = getattr(current_user, "live_alloc_value", 10.0) or 10.0 if current_user else 10.0
+    # Determine if user has Binance/Bybit keys configured (check DB, not env)
+    _user_has_binance = False
+    _user_has_bybit = False
+    if current_user is not None:
+        _user_api_keys = api_key_service.get_user_api_keys(session, current_user.id)
+        _user_has_binance = any(k.exchange == "binance" and k.is_active for k in _user_api_keys)
+        _user_has_bybit = any(k.exchange == "bybit" and k.is_active for k in _user_api_keys)
+    _global_binance = bool(settings.binance_api_key and settings.binance_api_secret)
+
     system_status = {
         "scheduler": scheduler_service.status(),
         "trading_mode": user_trading_mode,
@@ -981,7 +990,8 @@ def _build_dashboard_payload(
         "market_interval": settings.market_interval,
         "data_sources": settings.market_data_sources,
         "tracked_symbols_count": len(settings.tracked_symbols),
-        "binance_private_ready": bool(settings.binance_api_key and settings.binance_api_secret),
+        "binance_private_ready": _user_has_binance or _global_binance,
+        "bybit_private_ready": _user_has_bybit,
         "quote_currency": settings.quote_currency,
         "display_currency": display_currency,
         "max_trades_per_day": active_profile["max_trades_per_day"],

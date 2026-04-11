@@ -62,21 +62,44 @@ class AIAdvisor:
         private_learning = dashboard.get("private_learning")
         trade_ranking = dashboard.get("trade_ranking")
         binance_wallet = dashboard.get("binance_wallet")
+        bybit_wallet = dashboard.get("bybit_wallet")
+        bybit_positions = dashboard.get("bybit_positions")
+        leverage_paper = dashboard.get("leverage_paper")
+        live_portfolio = dashboard.get("live_portfolio")
         selected_symbol = symbol if symbol in chart_packages else dashboard.get("chart_focus_symbol")
         selected_chart = chart_packages.get(selected_symbol) if selected_symbol else None
 
-        is_live = system_status.get("trading_mode") == "LIVE" and binance_wallet is not None
+        is_live = system_status.get("trading_mode") == "LIVE"
 
-        if is_live:
-            wallet_info = f"Portfel Binance (LIVE): {binance_wallet}"
+        # Build wallet info from all sources
+        wallet_parts = []
+        if is_live and binance_wallet:
+            wallet_parts.append(f"Portfel Binance (LIVE): {binance_wallet}")
+        if is_live and bybit_wallet:
+            wallet_parts.append(f"Portfel Bybit (LIVE): {bybit_wallet}")
+        if is_live and bybit_positions:
+            wallet_parts.append(f"Pozycje Bybit perpetual: {bybit_positions}")
+        if not wallet_parts:
+            wallet_parts.append(f"Portfel paper (symulacja): {paper_wallet}")
+        if leverage_paper:
+            wallet_parts.append(
+                f"Paper dzwignia: equity=${leverage_paper.get('current_equity',0):.0f}, "
+                f"P&L=${leverage_paper.get('total_realized_pnl',0):.1f}, "
+                f"win_rate={leverage_paper.get('win_rate',0):.0f}%, "
+                f"dzwignia={leverage_paper.get('current_leverage_level',2)}x"
+            )
+        if is_live and live_portfolio:
+            wallet_parts.append(f"Holdowane krypto (z P&L): {live_portfolio[:10]}")
+        wallet_info = "\n".join(wallet_parts)
+
+        if is_live and (binance_wallet or bybit_wallet):
             mode_instruction = (
-                "Uzytkownik jest w trybie LIVE z prawdziwym kontem Binance. "
-                "Analizuj WYLACZNIE dane z portfela Binance powyzej. "
-                "NIE wspominaj o danych paper tradingu. "
-                "Podawaj realne wartosci z konta Binance."
+                "Uzytkownik jest w trybie LIVE z prawdziwym kontem. "
+                "Analizuj dane z portfeli Binance i/lub Bybit. "
+                "NIE wspominaj o danych paper tradingu (chyba ze o nauce dzwigni). "
+                "Podawaj realne wartosci z kont."
             )
         else:
-            wallet_info = f"Portfel paper (symulacja): {paper_wallet}"
             mode_instruction = (
                 "Tryb PAPER — nazywaj wynik portfela symulowanym wynikiem paper tradingu, a nie realnym zarobkiem."
             )
@@ -98,8 +121,11 @@ class AIAdvisor:
             f"Braki systemu: {learning.get('requirements', [])}\n"
             f"Prywatne uczenie Binance: {private_learning}\n"
             f"Ranking trade'ow Binance: {trade_ranking}\n"
+            f"Binance polaczone: {system_status.get('binance_private_ready', False)}\n"
+            f"Bybit polaczone: {system_status.get('bybit_private_ready', False)}\n"
             f"Artykuly edukacyjne: {articles[:8]}\n"
             f"Backtest: {backtest}\n"
+            f"Live stats: {dashboard.get('live_stats')}\n"
             f"Status systemu: {system_status}\n"
             f"Wybrany wykres ({selected_symbol}): {selected_chart}"
         )
@@ -162,12 +188,33 @@ class AIAdvisor:
 
         system_status = dashboard.get("system_status", {})
         binance_wallet = dashboard.get("binance_wallet")
-        is_live = system_status.get("trading_mode") == "LIVE" and binance_wallet is not None
+        bybit_wallet = dashboard.get("bybit_wallet")
+        bybit_positions = dashboard.get("bybit_positions")
+        leverage_paper = dashboard.get("leverage_paper")
+        live_portfolio = dashboard.get("live_portfolio")
+        is_live = system_status.get("trading_mode") == "LIVE"
 
-        if is_live:
-            wallet_info = f"Portfel Binance (LIVE): {binance_wallet}"
-        else:
-            wallet_info = f"Portfel paper (symulacja): {dashboard['wallet']}"
+        # Build comprehensive wallet info
+        wallet_parts = []
+        if is_live and binance_wallet:
+            wallet_parts.append(f"Portfel Binance (LIVE): {binance_wallet}")
+        if is_live and bybit_wallet:
+            wallet_parts.append(f"Portfel Bybit (LIVE): {bybit_wallet}")
+        if is_live and bybit_positions:
+            wallet_parts.append(f"Pozycje Bybit perpetual: {bybit_positions}")
+        if not wallet_parts:
+            wallet_parts.append(f"Portfel paper (symulacja): {dashboard.get('wallet', {})}")
+        if leverage_paper:
+            wallet_parts.append(
+                f"Paper dźwignia: equity=${leverage_paper.get('current_equity',0):.0f}, "
+                f"P&L=${leverage_paper.get('total_realized_pnl',0):.1f}, "
+                f"win_rate={leverage_paper.get('win_rate',0):.0f}%, "
+                f"dźwignia={leverage_paper.get('current_leverage_level',2)}x, "
+                f"otwarte={len(leverage_paper.get('open_positions',[]))}"
+            )
+        if is_live and live_portfolio:
+            wallet_parts.append(f"Holdowane krypto (z P&L): {live_portfolio[:10]}")
+        wallet_info = "\n".join(wallet_parts)
 
         # Detect commands
         command = parse_user_command(user_message)
@@ -183,20 +230,25 @@ class AIAdvisor:
         system_prompt = (
             "Jestes Agent Krypto — inteligentny asystent tradingowy kryptowalutowy. "
             "Odpowiadasz po polsku, krotko i konkretnie (max 8 zdan). "
-            "Masz pelny dostep do danych portfela, rynku i historii decyzji agenta. "
+            "Masz pelny dostep do danych portfela (Binance + Bybit), rynku, "
+            "paper tradingu z dzwignia, i historii decyzji agenta. "
             "Mozesz wyjasnic dlaczego agent kupil/sprzedal dane krypto, opierajac sie na danych decyzji i wskaznikach. "
-            "Jesli uzytkownik prosi o kupno/sprzedaz, mozesz to wykonac (w trybie LIVE na Binance). "
+            "Masz dostep do danych dzwigni (leverage paper trading) — mozesz wyjasniac pozycje LONG/SHORT, TP/SL, funding rate. "
+            "Jesli uzytkownik prosi o kupno/sprzedaz, mozesz to wykonac (w trybie LIVE na Binance lub Bybit). "
             "Zawsze ostrzegaj o ryzyku. Nie skladaj obietnic zysku. "
             "Jesli nie masz pewnych danych, powiedz to wprost.\n\n"
             f"KONTEKST:\n"
             f"{wallet_info}\n"
-            f"Rynek: {dashboard.get('market', [])[:10]}\n"
+            f"Rynek (top 10): {dashboard.get('market', [])[:10]}\n"
             f"Ostatnie decyzje: {dashboard.get('recent_decisions', [])[:5]}\n"
             f"Ostatnie transakcje: {dashboard.get('recent_trades', [])[:5]}\n"
             f"Tryb handlu: {system_status.get('trading_mode', 'PAPER')}\n"
             f"Tryb agenta: {system_status.get('agent_mode', 'normal')}\n"
+            f"Binance polaczone: {system_status.get('binance_private_ready', False)}\n"
+            f"Bybit polaczone: {system_status.get('bybit_private_ready', False)}\n"
             f"Prywatne uczenie: {dashboard.get('private_learning')}\n"
             f"Ranking trade'ow: {dashboard.get('trade_ranking')}\n"
+            f"Live stats: {dashboard.get('live_stats')}\n"
             f"Status: {system_status}"
             f"{command_context}"
         )
