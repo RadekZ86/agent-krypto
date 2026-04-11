@@ -356,6 +356,12 @@ class DecisionEngine:
         )
         session.add(decision)
         session.flush()
+
+        # Store entry snapshot on BUY decisions for learning feedback
+        if decision_value == "BUY":
+            from app.services.learning import LearningService
+            LearningService.store_entry_snapshot(decision, feature_row, buy_signals)
+
         return decision
 
     def _daily_trade_count(self, session: Session) -> int:

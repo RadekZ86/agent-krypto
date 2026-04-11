@@ -62,3 +62,31 @@ def init_db() -> None:
             if "commission_asset" not in cols:
                 conn.execute(sqlalchemy.text("ALTER TABLE live_order_log ADD COLUMN commission_asset VARCHAR(16)"))
                 conn.commit()
+        # Decision: store entry signals/indicators snapshot
+        if "decisions" in inspector.get_table_names():
+            cols = [col["name"] for col in inspector.get_columns("decisions")]
+            if "signals_json" not in cols:
+                conn.execute(sqlalchemy.text("ALTER TABLE decisions ADD COLUMN signals_json TEXT"))
+                conn.commit()
+        # LearningLog: rich indicator snapshots + signal tracking
+        if "learning_log" in inspector.get_table_names():
+            cols = [col["name"] for col in inspector.get_columns("learning_log")]
+            _ll_migrations = {
+                "symbol": "VARCHAR(16)",
+                "profit_pct": "REAL",
+                "hold_hours": "REAL",
+                "entry_signals_json": "TEXT",
+                "entry_rsi": "REAL",
+                "entry_macd_hist": "REAL",
+                "entry_trend": "VARCHAR(16)",
+                "entry_up_prob": "REAL",
+                "entry_bb_pos": "REAL",
+                "exit_rsi": "REAL",
+                "exit_macd_hist": "REAL",
+                "exit_trend": "VARCHAR(16)",
+                "exit_up_prob": "REAL",
+            }
+            for col_name, col_type in _ll_migrations.items():
+                if col_name not in cols:
+                    conn.execute(sqlalchemy.text(f"ALTER TABLE learning_log ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()

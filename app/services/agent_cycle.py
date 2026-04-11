@@ -520,6 +520,7 @@ class AgentCycle:
                             trade,
                             market_state=str(feature_row["trend"]),
                             notes=decision.reason,
+                            exit_feature_row=feature_row,
                         )
 
                 results.append(

@@ -113,6 +113,7 @@ class Decision(Base):
     confidence: Mapped[float] = mapped_column(Float)
     reason: Mapped[str] = mapped_column(Text)
     score: Mapped[int] = mapped_column(Integer, default=0)
+    signals_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     trades: Mapped[list[SimulatedTrade]] = relationship(back_populates="decision")
 
@@ -149,6 +150,33 @@ class LearningLog(Base):
     was_profitable: Mapped[bool] = mapped_column()
     market_state: Mapped[str] = mapped_column(String(32))
     notes: Mapped[str] = mapped_column(Text)
+    # Extended learning fields
+    symbol: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    profit_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hold_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_signals_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_rsi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_macd_hist: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_trend: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    entry_up_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_bb_pos: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_rsi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_macd_hist: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_trend: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    exit_up_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class SignalPerformance(Base):
+    """Tracks win/loss rate per buy signal for learning feedback."""
+    __tablename__ = "signal_performance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    signal_name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    total_fired: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
+    avg_profit_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class WhaleAlert(Base):
