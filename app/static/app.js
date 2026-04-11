@@ -806,26 +806,30 @@ async function applyDashboardPayload(payload, resetChartCache = true) {
         chartPackageCache = {};
     }
     syncSelectedSymbol(payload);
-    const isLive = (payload.config?.trading_mode || payload.system_status?.trading_mode) === "LIVE";
+    const sysStatus = payload.system_status || {};
+    const isLive = (payload.config?.trading_mode || sysStatus.trading_mode) === "LIVE";
+    const hasExchangeKeys = sysStatus.binance_private_ready || sysStatus.bybit_private_ready;
     const bw = isLive && payload.binance_wallet ? payload.binance_wallet : null;
     const ls = isLive && payload.live_stats ? payload.live_stats : null;
     const bybitW = isLive && payload.bybit_wallet ? payload.bybit_wallet : null;
     const bybitP = isLive && payload.bybit_positions ? payload.bybit_positions : null;
-    paintWallet(payload.wallet, bw, ls, bybitW);
+    // In LIVE mode with exchange keys: hide paper data, show real or loading
+    const hidePaper = isLive && hasExchangeKeys;
+    paintWallet(payload.wallet, bw, ls, bybitW, hidePaper);
     paintModeStrip(payload.system_status, payload.config, payload.wallet);
     paintAgentMode(payload.system_status, payload.config);
-    paintCapitalSummary(payload.wallet, bw, ls, bybitW, bybitP);
+    paintCapitalSummary(payload.wallet, bw, ls, bybitW, bybitP, hidePaper);
     paintApiUsage(payload.api_usage);
-    paintBoughtCoins(bw ? (bw.holdings || []).filter(h => h.value > 1).map(h => ({symbol: h.asset, buy_value: h.value, quantity: h.total, buy_price: h.value / (h.total || 1)})) : payload.wallet.positions);
+    paintBoughtCoins(bw ? (bw.holdings || []).filter(h => h.value > 1).map(h => ({symbol: h.asset, buy_value: h.value, quantity: h.total, buy_price: h.value / (h.total || 1)})) : (hidePaper ? [] : payload.wallet.positions));
     paintWatchlist(payload.market);
     paintPrivateLearning(payload.private_learning);
     paintTradeRanking(payload.trade_ranking);
     paintTradeBuckets(payload.recent_trades);
     paintSectorFilters(payload.config);
     paintMarket(payload.market);
-    paintPositions(payload.wallet.positions);
+    paintPositions(hidePaper && !bw ? [] : (bw ? [] : payload.wallet.positions));
     paintDecisions(payload.recent_decisions);
-    paintTrades(payload.recent_trades);
+    paintTrades(hidePaper ? [] : payload.recent_trades);
     paintLiveOrders(payload.live_orders || []);
     if (payload.live_portfolio && payload.live_portfolio.length) {
         const quoteCur = payload.binance_wallet ? payload.binance_wallet.quote_currency : "PLN";
@@ -857,13 +861,14 @@ function paintChartError(message) {
     document.getElementById("chart-insights").innerHTML = "";
 }
 
-function paintWallet(wallet, binanceWallet, liveStats, bybitWallet) {
+function paintWallet(wallet, binanceWallet, liveStats, bybitWallet, hidePaper) {
     // Update metric labels based on mode
+    const isExchange = binanceWallet || hidePaper;
     const metricLabels = {
-        "cash-balance": binanceWallet ? `Wolne ${binanceWallet.quote_currency || "USDT"}` : "Gotowka",
-        "gross-profit": binanceWallet ? "Zysk (niezreal.)" : "Zysk",
-        "gross-loss": binanceWallet ? "Strata (niezreal.)" : "Strata",
-        "realized-profit": binanceWallet ? "Bilans P&L" : "Bilans",
+        "cash-balance": isExchange ? `Wolne ${binanceWallet ? (binanceWallet.quote_currency || "USDT") : "..."}` : "Gotowka",
+        "gross-profit": isExchange ? "Zysk (niezreal.)" : "Zysk",
+        "gross-loss": isExchange ? "Strata (niezreal.)" : "Strata",
+        "realized-profit": isExchange ? "Bilans P&L" : "Bilans",
         "buy-count": "Kupione",
         "sell-count": "Sprzedane",
         "win-rate": "Win rate",
@@ -910,6 +915,17 @@ function paintWallet(wallet, binanceWallet, liveStats, bybitWallet) {
             document.getElementById("gross-loss").textContent = "–";
             document.getElementById("realized-profit").textContent = formatQuote(totalValue, walletQuote);
         }
+    } else if (hidePaper) {
+        // LIVE mode but exchange data not loaded yet — show loading
+        document.getElementById("cash-balance").textContent = "Ładuję...";
+        document.getElementById("equity").textContent = "Ładuję...";
+        document.getElementById("buy-count").textContent = "–";
+        document.getElementById("sell-count").textContent = "–";
+        document.getElementById("open-positions-count").textContent = "–";
+        document.getElementById("gross-profit").textContent = "–";
+        document.getElementById("gross-loss").textContent = "–";
+        document.getElementById("realized-profit").textContent = "–";
+        document.getElementById("win-rate").textContent = "–";
     } else {
         document.getElementById("cash-balance").textContent = formatQuote(wallet.cash_balance);
         document.getElementById("equity").textContent = formatQuote(wallet.equity);
@@ -921,7 +937,7 @@ function paintWallet(wallet, binanceWallet, liveStats, bybitWallet) {
         document.getElementById("realized-profit").textContent = formatQuote(wallet.realized_profit);
         document.getElementById("win-rate").textContent = `${percentFormatter.format(wallet.win_rate)}%`;
     }
-    paintQuickSummary(wallet, binanceWallet, liveStats);
+    paintQuickSummary(wallet, binanceWallet, liveStats, hidePaper);
     
     // Mobile hero card update
     const heroBalance = document.getElementById("mobile-hero-balance");
@@ -963,6 +979,14 @@ function paintWallet(wallet, binanceWallet, liveStats, bybitWallet) {
             heroLoss.closest(".mobile-hero-stat")?.classList.add(gl > 0 ? "negative" : "positive");
         }
         if (heroWinrate) heroWinrate.textContent = liveStats ? `${percentFormatter.format(liveStats.win_rate || 0)}%` : "–";
+    } else if (hidePaper) {
+        // LIVE mode but exchange data loading
+        const heroBalanceLabel = document.querySelector(".mobile-hero-top .mobile-hero-top-label");
+        if (heroBalanceLabel) heroBalanceLabel.textContent = "Portfel LIVE";
+        if (heroBalance) { heroBalance.textContent = "Ładuję..."; heroBalance.style.color = ""; }
+        if (heroProfit) heroProfit.textContent = "–";
+        if (heroLoss) heroLoss.textContent = "–";
+        if (heroWinrate) heroWinrate.textContent = "–";
     } else {
         if (heroBalance) {
             heroBalance.textContent = formatQuote(wallet.realized_profit);
@@ -1198,7 +1222,7 @@ function paintAgentMode(systemStatus, config) {
     ` : "";
 }
 
-function paintCapitalSummary(wallet, binanceWallet, liveStats, bybitWallet, bybitPositions) {
+function paintCapitalSummary(wallet, binanceWallet, liveStats, bybitWallet, bybitPositions, hidePaper) {
     const container = document.getElementById("capital-summary");
     const lp = dashboardState?.leverage_paper;
 
@@ -1269,6 +1293,12 @@ function paintCapitalSummary(wallet, binanceWallet, liveStats, bybitWallet, bybi
         }
 
         container.innerHTML = `${combinedHtml}${binanceHtml}${bybitHtml}${leverageHtml}`;
+    } else if (hidePaper) {
+        // LIVE mode, exchange data still loading
+        container.innerHTML = `
+            <div class="portfolio-section-header binance">🟡 Portfel giełdowy</div>
+            ${buildQuickCard("Status", "Ładowanie danych...", "Łączenie z giełdą Binance/Bybit")}
+        `;
     } else {
         const displayStartPln = dashboardState?.config?.start_balance_display_pln || 1000;
 
@@ -1319,9 +1349,13 @@ function paintApiUsage(apiUsage) {
     `;
 }
 
-function paintQuickSummary(wallet, binanceWallet, liveStats) {
+function paintQuickSummary(wallet, binanceWallet, liveStats, hidePaper) {
     const container = document.getElementById("quick-summary");
     if (!container) {
+        return;
+    }
+    if (hidePaper && !binanceWallet) {
+        container.innerHTML = buildQuickCard("Portfel LIVE", "Ładowanie...", "Łączenie z giełdą");
         return;
     }
     if (binanceWallet) {

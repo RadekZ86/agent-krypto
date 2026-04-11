@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time as _time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -36,6 +38,24 @@ from app.services.scheduler import SchedulerService
 from app.services.wallet import WalletService
 
 logger = logging.getLogger(__name__)
+
+# ---- Exchange data cache (per-user, TTL-based) ----
+_exchange_cache: dict[int, dict] = {}
+_exchange_cache_lock = threading.Lock()
+_EXCHANGE_CACHE_TTL = 120  # seconds
+
+
+def _get_exchange_cache(user_id: int) -> dict | None:
+    with _exchange_cache_lock:
+        entry = _exchange_cache.get(user_id)
+        if entry and (_time.time() - entry["ts"]) < _EXCHANGE_CACHE_TTL:
+            return entry["data"]
+    return None
+
+
+def _set_exchange_cache(user_id: int, data: dict) -> None:
+    with _exchange_cache_lock:
+        _exchange_cache[user_id] = {"ts": _time.time(), "data": data}
 
 # ---- Rate limiter ----
 limiter = Limiter(key_func=get_remote_address)
@@ -372,6 +392,7 @@ def agent_chat(request: Request, body: ChatRequest) -> JSONResponse:
             session,
             include_chart_package=True,
             current_user=current_user,
+            skip_exchange_api=True,
         )
         result = ai_advisor.chat(
             session,
@@ -827,6 +848,7 @@ def _build_dashboard_payload(
     include_chart_package: bool = False,
     chart_focus_symbol: str | None = None,
     current_user: User | None = None,
+    skip_exchange_api: bool = False,
 ) -> dict[str, object]:
     active_profile = runtime_state.get_active_profile(session)
     if current_user is not None:
@@ -1033,49 +1055,70 @@ def _build_dashboard_payload(
     bybit_wallet = None
     bybit_positions = None
     if current_user is not None:
-        _, client = get_user_binance_client(session, current_user.id)
-        if client is not None:
-            private_learning = learning_center.build_private_learning_state(
-                client,
-                settings.tracked_symbols,
-                settings.preferred_trade_quotes,
-            )
-            trade_ranking = learning_center.build_trade_history_ranking(
-                client,
-                settings.tracked_symbols,
-                settings.preferred_trade_quotes,
-            )
-            if user_trading_mode == "LIVE":
-                try:
-                    # Try PLN first (Binance PL), then configured exchange quote, then USDT
-                    for try_quote in ["PLN", settings.exchange_quote_currency, "USDT"]:
-                        portfolio = client.get_portfolio_value(try_quote)
-                        if isinstance(portfolio, dict) and "error" not in portfolio:
-                            total = portfolio.get("total_value", 0)
-                            if total > 0:
-                                binance_wallet = portfolio
-                                break
-                except Exception:
-                    pass
-                try:
-                    quote_for_pnl = (binance_wallet or {}).get("quote_currency", "PLN")
-                    live_portfolio = client.get_portfolio_with_cost_basis(quote_for_pnl)
-                except Exception:
-                    pass
+        _uid = current_user.id
+        _cached = _get_exchange_cache(_uid) if skip_exchange_api else None
+        if _cached is not None:
+            # Use cached exchange data (fast path for chat & repeated dashboard loads)
+            private_learning = _cached.get("private_learning")
+            trade_ranking = _cached.get("trade_ranking")
+            binance_wallet = _cached.get("binance_wallet")
+            live_portfolio = _cached.get("live_portfolio")
+            bybit_wallet = _cached.get("bybit_wallet")
+            bybit_positions = _cached.get("bybit_positions")
+        else:
+            # Fresh fetch from exchange APIs
+            _, client = get_user_binance_client(session, current_user.id)
+            if client is not None:
+                private_learning = learning_center.build_private_learning_state(
+                    client,
+                    settings.tracked_symbols,
+                    settings.preferred_trade_quotes,
+                )
+                trade_ranking = learning_center.build_trade_history_ranking(
+                    client,
+                    settings.tracked_symbols,
+                    settings.preferred_trade_quotes,
+                )
+                if user_trading_mode == "LIVE":
+                    try:
+                        for try_quote in ["PLN", settings.exchange_quote_currency, "USDT"]:
+                            portfolio = client.get_portfolio_value(try_quote)
+                            if isinstance(portfolio, dict) and "error" not in portfolio:
+                                total = portfolio.get("total_value", 0)
+                                if total > 0:
+                                    binance_wallet = portfolio
+                                    break
+                    except Exception:
+                        pass
+                    try:
+                        quote_for_pnl = (binance_wallet or {}).get("quote_currency", "PLN")
+                        live_portfolio = client.get_portfolio_with_cost_basis(quote_for_pnl)
+                    except Exception:
+                        pass
 
-        # --- Bybit wallet + positions ---
-        _, bybit_client = get_user_bybit_client(session, current_user.id)
-        if bybit_client is not None and user_trading_mode == "LIVE":
-            try:
-                bybit_wallet = bybit_client.get_portfolio_value()
-                if isinstance(bybit_wallet, dict) and "error" in bybit_wallet:
+            # --- Bybit wallet + positions ---
+            _, bybit_client = get_user_bybit_client(session, current_user.id)
+            if bybit_client is not None and user_trading_mode == "LIVE":
+                try:
+                    bybit_wallet = bybit_client.get_portfolio_value()
+                    if isinstance(bybit_wallet, dict) and "error" in bybit_wallet:
+                        bybit_wallet = None
+                except Exception:
                     bybit_wallet = None
-            except Exception:
-                bybit_wallet = None
-            try:
-                bybit_positions = bybit_client.get_open_positions_summary()
-            except Exception:
-                bybit_positions = None
+                try:
+                    bybit_positions = bybit_client.get_open_positions_summary()
+                except Exception:
+                    bybit_positions = None
+
+            # Cache the fetched data for subsequent requests (chat, refreshes)
+            _set_exchange_cache(_uid, {
+                "private_learning": private_learning,
+                "trade_ranking": trade_ranking,
+                "binance_wallet": binance_wallet,
+                "live_portfolio": live_portfolio,
+                "bybit_wallet": bybit_wallet,
+                "bybit_positions": bybit_positions,
+            })
 
     # --- Leverage paper trading snapshot ---
     leverage_snapshot = None
