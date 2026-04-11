@@ -378,6 +378,7 @@ def agent_chat(request: Request, body: ChatRequest) -> JSONResponse:
             user_message=body.message,
             dashboard=dashboard_payload,
             conversation_history=body.history,
+            current_user=current_user,
         )
     return JSONResponse(result)
 

@@ -74,6 +74,13 @@ class RuntimeStateService:
         except Exception:
             logger.debug("Adaptive feedback unavailable, using static profile")
 
+        # Apply admin manual overrides (from self-modify chat commands)
+        try:
+            from app.services.self_modify import apply_overrides_to_profile
+            profile = apply_overrides_to_profile(session, profile)
+        except Exception:
+            pass
+
         return profile
 
     def _get_value(self, session: Session, key: str, default: str) -> str:

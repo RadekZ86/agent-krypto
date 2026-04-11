@@ -3457,6 +3457,14 @@ async function sendChatMessage(userMsg) {
             addChatMessage("agent", reply);
         }
 
+        // Show self-modification results if any
+        if (data.selfmod_results && data.selfmod_results.length > 0) {
+            const modParts = data.selfmod_results.map(r =>
+                r.ok ? `✅ ${r.message || "OK"}` : `❌ ${r.error || "Błąd"}`
+            );
+            addChatMessage("agent", `<div class="chat-selfmod-notice">🔧 <strong>Modyfikacja agenta:</strong><br>${modParts.join("<br>")}</div>`, true);
+        }
+
         setStatus(`Czat: odpowiedź (${data.input_tokens || 0}+${data.output_tokens || 0} tokenów)`);
     } catch (err) {
         showChatTyping(false);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -176,13 +177,19 @@ class AIAdvisor:
         user_message: str,
         dashboard: dict[str, Any],
         conversation_history: list[dict[str, str]] | None = None,
+        current_user: Any | None = None,
     ) -> dict[str, Any]:
         """Interactive chat with the agent. User can ask questions about decisions,
-        portfolio, market, and give trading commands."""
+        portfolio, market, and give trading commands.
+        Admin user (zajcu1986@wp.pl) can also modify agent parameters via chat."""
         if not settings.openai_api_key:
             return {"enabled": False, "reply": "Dodaj OPENAI_API_KEY w pliku .env, aby wlaczyc czat z agentem."}
         if OpenAI is None:
             return {"enabled": False, "reply": "Biblioteka openai nie jest zainstalowana."}
+
+        # Check if admin user (self-modification rights)
+        from app.services.self_modify import is_admin
+        admin_mode = is_admin(current_user)
 
         client = OpenAI(api_key=settings.openai_api_key)
 
@@ -261,6 +268,38 @@ class AIAdvisor:
             f"{command_context}"
         )
 
+        # Admin self-modification tools
+        if admin_mode:
+            # Pre-fetch current state for the AI context
+            from app.services.self_modify import execute_command as _exec_cmd
+            _current_state = _exec_cmd(session, {"tool": "get_params"}, current_user)
+            _learn_state = _exec_cmd(session, {"tool": "get_learning_stats"}, current_user)
+            _adaptive = _exec_cmd(session, {"tool": "get_adaptive_state"}, current_user)
+
+            system_prompt += (
+                "\n\n=== TRYB ADMINISTRATORA (SELF-MODIFY) ===\n"
+                "Uzytkownik jest administratorem i moze Cie prosic o zmiane parametrow agenta. "
+                "Masz dostep do narzedzi modyfikacji. Gdy uzytkownik prosi o zmiane parametru, "
+                "odpowiedz normalnie i DODAJ na koncu polecenie w formacie:\n"
+                '<!--SELFMOD:{"tool":"nazwa","params":{...}}-->\n\n'
+                "Dostepne narzedzia:\n"
+                '1. set_param - zmien parametr: {"tool":"set_param","params":{"key":"buy_score_threshold","value":5}}\n'
+                "   Dozwolone klucze: buy_score_threshold (1-10), profit_target (0.005-0.15), "
+                "stop_loss (0.005-0.15), max_hold_hours (1-168), max_trades_per_day (1-9999), "
+                "max_open_positions (1-9999), exploration_rate (0-0.5), allocation_scale (0.1-3.0)\n"
+                '2. set_agent_mode - zmien tryb: {"tool":"set_agent_mode","params":{"mode":"risky"}}\n'
+                "   Tryby: cautious, normal, risky, trading\n"
+                '3. get_signal_ranking - pokaz ranking sygnalow: {"tool":"get_signal_ranking","params":{}}\n'
+                '4. reset_signal_stats - resetuj statystyki sygnalow: {"tool":"reset_signal_stats","params":{}}\n\n'
+                "Mozesz uzyc wielu polecen na raz (kazde w osobnym <!--SELFMOD:...-->).\n"
+                "NIGDY nie modyfikuj parametrow bez wyraznej prosby uzytkownika.\n"
+                "Opisz co zmieniasz i dlaczego.\n\n"
+                f"Aktualny profil: {json.dumps(_current_state.get('active_profile', {}), ensure_ascii=False, default=str)}\n"
+                f"Nadpisania reczne: {json.dumps(_current_state.get('manual_overrides', {}), ensure_ascii=False)}\n"
+                f"Statystyki nauki: {json.dumps(_learn_state, ensure_ascii=False, default=str)}\n"
+                f"Stan adaptacji: {json.dumps(_adaptive, ensure_ascii=False, default=str)}\n"
+            )
+
         messages = [{"role": "system", "content": system_prompt}]
         if conversation_history:
             for msg in conversation_history[-10:]:  # Keep last 10 messages for context
@@ -309,10 +348,27 @@ class AIAdvisor:
             # Remove CMD tag from visible reply
             reply = re.sub(r'<!--CMD:\{.*?\}-->', '', reply).strip()
 
+        # Extract and execute self-modification commands (admin only)
+        selfmod_results = []
+        if admin_mode:
+            from app.services.self_modify import execute_command as _exec_selfmod
+            selfmod_matches = re.findall(r'<!--SELFMOD:(\{.*?\})-->', reply)
+            for match_str in selfmod_matches:
+                try:
+                    selfmod_cmd = json.loads(match_str)
+                    result = _exec_selfmod(session, selfmod_cmd, current_user)
+                    selfmod_results.append(result)
+                    logger.info("SELFMOD executed: %s -> %s", selfmod_cmd.get("tool"), result.get("ok"))
+                except (json.JSONDecodeError, Exception) as exc:
+                    selfmod_results.append({"ok": False, "error": str(exc)})
+            # Remove SELFMOD tags from visible reply
+            reply = re.sub(r'<!--SELFMOD:\{.*?\}-->', '', reply).strip()
+
         return {
             "enabled": True,
             "reply": reply,
             "command": detected_cmd or command,
+            "selfmod_results": selfmod_results if selfmod_results else None,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "estimated_cost_usd": round(estimated_cost, 6),
