@@ -95,4 +95,55 @@ def build_indicator_frame(rows: list[object]) -> pd.DataFrame:
     from app.services.whale_detector import compute_whale_indicators
     df = compute_whale_indicators(df)
 
+    # ── HTF (Higher Timeframe) 4h confluence ──
+    # Resample 1h → 4h on the fly i policz EMA20/50, RSI, MACD na 4h.
+    # Wynik jest forward-filled na siatke 1h, dzieki czemu dla kazdej 1h-swieczki
+    # mamy odpowiadajace 4h-wartosci (htf_trend, htf_rsi, htf_macd_hist).
+    try:
+        if len(df) >= 60:
+            htf = df.set_index("timestamp")[["open", "high", "low", "close", "volume"]].copy()
+            htf.index = pd.to_datetime(htf.index)
+            htf_4h = htf.resample("4h", label="right", closed="right").agg({
+                "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum",
+            }).dropna()
+            if len(htf_4h) >= 30:
+                htf_4h["ema20"] = htf_4h["close"].ewm(span=20, adjust=False).mean()
+                htf_4h["ema50"] = htf_4h["close"].ewm(span=50, adjust=False).mean()
+                htf_4h["ema12"] = htf_4h["close"].ewm(span=12, adjust=False).mean()
+                htf_4h["ema26"] = htf_4h["close"].ewm(span=26, adjust=False).mean()
+                htf_4h["macd"] = htf_4h["ema12"] - htf_4h["ema26"]
+                htf_4h["macd_signal"] = htf_4h["macd"].ewm(span=9, adjust=False).mean()
+                htf_4h["macd_hist"] = htf_4h["macd"] - htf_4h["macd_signal"]
+                _delta = htf_4h["close"].diff()
+                _gain = _delta.clip(lower=0)
+                _loss = -_delta.clip(upper=0)
+                _ag = _gain.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+                _al = _loss.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+                _rs = _ag / _al.replace(0, np.nan)
+                htf_4h["rsi"] = (100 - (100 / (1 + _rs))).fillna(50.0)
+                htf_4h["ema_gap_pct"] = ((htf_4h["ema20"] - htf_4h["ema50"]) / htf_4h["ema50"].replace(0, np.nan)).fillna(0.0) * 100
+                htf_4h["htf_trend"] = np.where(
+                    htf_4h["ema_gap_pct"] > 0.15, "UP",
+                    np.where(htf_4h["ema_gap_pct"] < -0.15, "DOWN", "SIDEWAYS"),
+                )
+                # forward-fill na siatke 1h
+                htf_aligned = htf_4h[["rsi", "macd_hist", "htf_trend"]].reindex(
+                    pd.to_datetime(df["timestamp"]), method="ffill"
+                ).reset_index(drop=True)
+                df["htf_rsi"] = htf_aligned["rsi"].fillna(50.0).values
+                df["htf_macd_hist"] = htf_aligned["macd_hist"].fillna(0.0).values
+                df["htf_trend"] = htf_aligned["htf_trend"].fillna("SIDEWAYS").values
+            else:
+                df["htf_rsi"] = 50.0
+                df["htf_macd_hist"] = 0.0
+                df["htf_trend"] = "SIDEWAYS"
+        else:
+            df["htf_rsi"] = 50.0
+            df["htf_macd_hist"] = 0.0
+            df["htf_trend"] = "SIDEWAYS"
+    except Exception:
+        df["htf_rsi"] = 50.0
+        df["htf_macd_hist"] = 0.0
+        df["htf_trend"] = "SIDEWAYS"
+
     return df.reset_index(drop=True)

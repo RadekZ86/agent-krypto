@@ -18,23 +18,28 @@ jobs:
 
       - name: Create deployment package
         run: |
-          # Pakuj tylko kod aplikacji — bez bazy danych, .env, logów, venv
+          # Pakuj kod aplikacji Django — bez bazy danych, .env, logów, venv
           zip -r app.zip \
             app/ \
+            agent_krypto/ \
+            manage.py \
+            passenger_wsgi.py \
             requirements.txt \
             -x "*.pyc" \
             -x "*__pycache__*" \
             -x "*.db" \
             -x "*.db-shm" \
             -x "*.db-wal" \
-            -x "*.sqlite3"
+            -x "*.sqlite3" \
+            -x "app/migrations/*.pyc"
 
       - name: Deploy to server
         env:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
           SSH_HOST: s84.mydevil.net
-          DEPLOY_PATH: /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
+          DEPLOY_PATH: /usr/home/MagicParty/domains/agentkrypto.magicparty.usermd.net/public_python
+          VENV_PIP: /usr/home/MagicParty/.virtualenv/agent-krypto/bin/pip
         run: |
           mkdir -p ~/.ssh
 
@@ -58,7 +63,12 @@ jobs:
           # Create remote deploy script
           cat > /tmp/deploy_remote.sh << 'SCRIPT'
           set -e
-          cd /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
+          DEPLOY_PATH=/usr/home/MagicParty/domains/agentkrypto.magicparty.usermd.net/public_python
+          VENV_PIP=/usr/home/MagicParty/.virtualenv/agent-krypto/bin/pip
+          VENV_PYTHON=/usr/home/MagicParty/.virtualenv/agent-krypto/bin/python3.12
+          DOMAIN=agentkrypto.magicparty.usermd.net
+
+          cd $DEPLOY_PATH
           if [ -f agent_krypto.db ]; then cp agent_krypto.db agent_krypto.db.backup; fi
           unzip -o app.zip
           rm -f app.zip
@@ -67,13 +77,12 @@ jobs:
           else
             rm -f agent_krypto.db.backup
           fi
-          pip install --user -r requirements.txt --quiet 2>/dev/null
-          pkill -f "uvicorn app.main:app" || true
-          sleep 2
-          cd /usr/home/MagicParty/domains/magicparty.usermd.net/public_python
-          nohup /usr/local/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 12345 >> /tmp/uvicorn_agentkrypto.log 2>&1 &
+          $VENV_PIP install -r requirements.txt --quiet 2>/dev/null
+          $VENV_PYTHON manage.py migrate --noinput 2>/dev/null || true
+          $VENV_PYTHON manage.py collectstatic --noinput 2>/dev/null || true
+          devil www restart $DOMAIN
           sleep 3
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:12345/)
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://${DOMAIN}/)
           echo "Deploy completed! HTTP status: ${HTTP_CODE}"
           SCRIPT
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
 
 from app.config import settings
 from app.models import LeverageSimTrade
@@ -45,13 +45,13 @@ class LeverageEngine:
     # DECISION: Should we LONG, SHORT, or CLOSE?
     # ──────────────────────────────────────────────────
 
-    def evaluate(self, session: Session, symbol: str, feature_row: dict, perp_data: dict | None = None) -> dict | None:
+    def evaluate(self, symbol: str, feature_row: dict, perp_data: dict | None = None) -> dict | None:
         """Evaluate leverage signals for a symbol. Returns action dict or None.
 
         Args:
             perp_data: Optional Bybit perpetual snapshot (funding rate, OI, mark price).
         """
-        profile = self.runtime_state.get_active_profile(session)
+        profile = self.runtime_state.get_active_profile()
 
         # Only in PAPER mode + learning
         if settings.trading_mode != "PAPER":
@@ -60,17 +60,17 @@ class LeverageEngine:
         close = float(feature_row["close"])
 
         # First check: manage existing positions (close, liquidation, funding)
-        existing = self._get_open_position(session, symbol)
+        existing = self._get_open_position(symbol)
         if existing is not None:
-            return self._evaluate_exit(session, existing, feature_row, close, profile)
+            return self._evaluate_exit(existing, feature_row, close, profile)
 
         # Check position limits
-        open_count = self._count_open_positions(session)
+        open_count = self._count_open_positions()
         if open_count >= MAX_LEVERAGE_POSITIONS:
             return None
 
         # Check available margin
-        available = self._available_margin(session)
+        available = self._available_margin()
         if available < 50:  # min $50 margin
             return None
 
@@ -97,7 +97,7 @@ class LeverageEngine:
             return None
 
         # Determine leverage based on progression
-        leverage = self._current_leverage(session)
+        leverage = self._current_leverage()
 
         # Calculate position sizing (Playbook 14: 1-2% risk rule)
         risk_pct = 0.01 if leverage >= 5 else 0.02
@@ -139,8 +139,7 @@ class LeverageEngine:
             status="OPEN",
             opened_at=datetime.utcnow(),
         )
-        session.add(trade)
-        session.flush()
+        trade.save()
 
         _log.info(
             "LEVERAGE PAPER %s %s %sx @ $%.2f | margin=$%.2f liq=$%.2f tp=$%.2f sl=$%.2f | score=%d",
@@ -415,7 +414,7 @@ class LeverageEngine:
     # EXIT evaluation for existing position
     # ──────────────────────────────────────────────────
 
-    def _evaluate_exit(self, session: Session, trade: LeverageSimTrade, f: dict, close: float, profile: dict) -> dict | None:
+    def _evaluate_exit(self, trade: LeverageSimTrade, f: dict, close: float, profile: dict) -> dict | None:
         """Check if open leverage position should be closed."""
 
         # 1. Apply funding fee (simulate 8h funding)
@@ -423,23 +422,23 @@ class LeverageEngine:
 
         # 2. Check liquidation
         if trade.side == "LONG" and close <= trade.liquidation_price:
-            return self._close_position(session, trade, close, "liquidation")
+            return self._close_position(trade, close, "liquidation")
         if trade.side == "SHORT" and close >= trade.liquidation_price:
-            return self._close_position(session, trade, close, "liquidation")
+            return self._close_position(trade, close, "liquidation")
 
         # 3. Check stop loss
         if trade.stop_loss:
             if trade.side == "LONG" and close <= trade.stop_loss:
-                return self._close_position(session, trade, close, "stop_loss")
+                return self._close_position(trade, close, "stop_loss")
             if trade.side == "SHORT" and close >= trade.stop_loss:
-                return self._close_position(session, trade, close, "stop_loss")
+                return self._close_position(trade, close, "stop_loss")
 
         # 4. Check take profit
         if trade.take_profit:
             if trade.side == "LONG" and close >= trade.take_profit:
-                return self._close_position(session, trade, close, "take_profit")
+                return self._close_position(trade, close, "take_profit")
             if trade.side == "SHORT" and close <= trade.take_profit:
-                return self._close_position(session, trade, close, "take_profit")
+                return self._close_position(trade, close, "take_profit")
 
         # 5. Signal-based exit
         rsi = float(f["rsi"])
@@ -472,7 +471,7 @@ class LeverageEngine:
             exit_score += 4
 
         if exit_score >= 4:
-            return self._close_position(session, trade, close, "signal")
+            return self._close_position(trade, close, "signal")
 
         return None
 
@@ -480,7 +479,7 @@ class LeverageEngine:
     # CLOSE position
     # ──────────────────────────────────────────────────
 
-    def _close_position(self, session: Session, trade: LeverageSimTrade, exit_price: float, reason: str) -> dict:
+    def _close_position(self, trade: LeverageSimTrade, exit_price: float, reason: str) -> dict:
         """Close a paper leverage position and calculate P&L."""
         if trade.side == "LONG":
             raw_pnl = (exit_price - trade.entry_price) / trade.entry_price * trade.margin_used * trade.leverage
@@ -501,6 +500,7 @@ class LeverageEngine:
         trade.status = "LIQUIDATED" if reason == "liquidation" else "CLOSED"
         trade.close_reason = reason
         trade.closed_at = datetime.utcnow()
+        trade.save()
 
         _log.info(
             "LEVERAGE CLOSE %s %s %sx | entry=$%.2f exit=$%.2f | P&L=$%.2f (%.1f%%) | reason=%s | funding=$%.4f",
@@ -514,7 +514,6 @@ class LeverageEngine:
             learning = LearningService()
             _result = "WIN" if pnl > 0 else "LOSS"
             learning.log_live_trade_result(
-                session,
                 symbol=trade.symbol,
                 result=_result,
                 profit_pct=round(pnl_pct, 2),
@@ -555,14 +554,11 @@ class LeverageEngine:
     # LEVERAGE PROGRESSION (Playbook 18)
     # ──────────────────────────────────────────────────
 
-    def _current_leverage(self, session: Session) -> float:
+    def _current_leverage(self) -> float:
         """Determine allowed leverage based on consecutive winning trades."""
-        recent = session.execute(
-            select(LeverageSimTrade)
-            .where(LeverageSimTrade.status.in_(["CLOSED", "LIQUIDATED"]))
-            .order_by(LeverageSimTrade.closed_at.desc())
-            .limit(50)
-        ).scalars().all()
+        recent = list(LeverageSimTrade.objects.filter(
+            status__in=["CLOSED", "LIQUIDATED"]
+        ).order_by('-closed_at')[:50])
 
         consecutive_wins = 0
         for t in recent:
@@ -585,51 +581,42 @@ class LeverageEngine:
     # HELPERS
     # ──────────────────────────────────────────────────
 
-    def _get_open_position(self, session: Session, symbol: str) -> LeverageSimTrade | None:
-        return session.execute(
-            select(LeverageSimTrade)
-            .where(LeverageSimTrade.symbol == symbol, LeverageSimTrade.status == "OPEN")
-        ).scalar_one_or_none()
+    def _get_open_position(self, symbol: str) -> LeverageSimTrade | None:
+        return LeverageSimTrade.objects.filter(symbol=symbol, status="OPEN").first()
 
-    def _count_open_positions(self, session: Session) -> int:
-        return int(session.execute(
-            select(func.count(LeverageSimTrade.id)).where(LeverageSimTrade.status == "OPEN")
-        ).scalar_one())
+    def _count_open_positions(self) -> int:
+        return LeverageSimTrade.objects.filter(status="OPEN").count()
 
-    def _available_margin(self, session: Session) -> float:
+    def _available_margin(self) -> float:
         """Calculate available margin from virtual leverage wallet."""
-        used = session.execute(
-            select(func.coalesce(func.sum(LeverageSimTrade.margin_used), 0.0))
-            .where(LeverageSimTrade.status == "OPEN")
-        ).scalar_one()
-        realized = session.execute(
-            select(func.coalesce(func.sum(LeverageSimTrade.pnl), 0.0))
-            .where(LeverageSimTrade.status.in_(["CLOSED", "LIQUIDATED"]))
-        ).scalar_one()
+        used = LeverageSimTrade.objects.filter(status="OPEN").aggregate(
+            total=Coalesce(Sum('margin_used'), 0.0)
+        )['total']
+        realized = LeverageSimTrade.objects.filter(
+            status__in=["CLOSED", "LIQUIDATED"]
+        ).aggregate(
+            total=Coalesce(Sum('pnl'), 0.0)
+        )['total']
         return LEVERAGE_PAPER_BALANCE + float(realized) - float(used)
 
     # ──────────────────────────────────────────────────
     # SNAPSHOT for dashboard
     # ──────────────────────────────────────────────────
 
-    def get_snapshot(self, session: Session) -> dict:
+    def get_snapshot(self) -> dict:
         """Get full leverage paper portfolio state."""
-        open_trades = session.execute(
-            select(LeverageSimTrade).where(LeverageSimTrade.status == "OPEN")
-            .order_by(LeverageSimTrade.opened_at.desc())
-        ).scalars().all()
-        closed_trades = session.execute(
-            select(LeverageSimTrade).where(LeverageSimTrade.status.in_(["CLOSED", "LIQUIDATED"]))
-            .order_by(LeverageSimTrade.closed_at.desc()).limit(50)
-        ).scalars().all()
+        open_trades = list(LeverageSimTrade.objects.filter(status="OPEN").order_by('-opened_at'))
+        closed_trades = list(LeverageSimTrade.objects.filter(
+            status__in=["CLOSED", "LIQUIDATED"]
+        ).order_by('-closed_at')[:50])
 
         total_pnl = sum(t.pnl or 0 for t in closed_trades)
         wins = [t for t in closed_trades if (t.pnl or 0) > 0]
         losses = [t for t in closed_trades if (t.pnl or 0) <= 0]
         liquidations = [t for t in closed_trades if t.status == "LIQUIDATED"]
         win_rate = len(wins) / len(closed_trades) * 100 if closed_trades else 0
-        available = self._available_margin(session)
-        current_lev = self._current_leverage(session)
+        available = self._available_margin()
+        current_lev = self._current_leverage()
 
         return {
             "paper_balance": round(LEVERAGE_PAPER_BALANCE, 2),

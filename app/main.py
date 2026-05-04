@@ -34,6 +34,7 @@ from app.services.currency_service import CurrencyService
 from app.services.learning_center import LearningCenter
 from app.services.market_data import LiveQuoteService, load_latest_market_row
 from app.services.runtime_state import RuntimeStateService
+from app.services.risk_management import RiskManager
 from app.services.scheduler import SchedulerService
 from app.services.wallet import WalletService
 
@@ -245,6 +246,7 @@ def run_managed_cycle() -> dict[str, object]:
 
 
 scheduler_service = SchedulerService(settings.cycle_interval_seconds, run_managed_cycle)
+risk_manager = RiskManager()
 
 
 def no_cache_headers() -> dict[str, str]:
@@ -595,6 +597,138 @@ def set_agent_mode(mode: str, request: Request) -> JSONResponse:
 
         payload = _build_dashboard_payload(session, current_user=current_user)
     return JSONResponse({"mode": normalized, "dashboard": payload})
+
+
+@app.get("/api/risk-status")
+def get_risk_status() -> JSONResponse:
+    """Return current risk management status (circuit breakers, BTC correlation)."""
+    try:
+        return JSONResponse(risk_manager.assess())
+    except Exception as exc:
+        logger.warning("risk assessment failed: %s", exc)
+        return JSONResponse({"level": "NORMAL", "allow_new_buys": True, "error": str(exc)})
+
+
+@app.get("/api/learning-insights")
+def get_learning_insights() -> JSONResponse:
+    """Aggregated statistics from paper trading: win rate, per-symbol, exit reasons, equity curve."""
+    from collections import defaultdict
+
+    now = datetime.utcnow()
+    cutoff_7d = now - timedelta(days=7)
+    cutoff_30d = now - timedelta(days=30)
+
+    try:
+        with SessionLocal() as session:
+            # Closed paper trades
+            closed_trades = session.execute(
+                select(SimulatedTrade).where(SimulatedTrade.status == "CLOSED")
+            ).scalars().all()
+
+            def _winrate(trades):
+                total = len(trades)
+                if total == 0:
+                    return {"total": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "avg_profit_pct": 0.0, "net_profit": 0.0}
+                wins = [t for t in trades if (t.profit or 0) > 0]
+                total_profit = sum(t.profit or 0 for t in trades)
+                total_buy = sum(t.buy_value or 0 for t in trades) or 1.0
+                avg_pct = (total_profit / total_buy) * 100
+                return {
+                    "total": total,
+                    "wins": len(wins),
+                    "losses": total - len(wins),
+                    "win_rate": round(len(wins) / total * 100, 1),
+                    "avg_profit_pct": round(avg_pct, 2),
+                    "net_profit": round(total_profit, 2),
+                }
+
+            trades_7d = [t for t in closed_trades if t.closed_at and t.closed_at >= cutoff_7d]
+            trades_30d = [t for t in closed_trades if t.closed_at and t.closed_at >= cutoff_30d]
+
+            summary = {
+                "last_7d": _winrate(trades_7d),
+                "last_30d": _winrate(trades_30d),
+                "all_time": _winrate(closed_trades),
+            }
+
+            # Avg hold time
+            hold_mins = [t.duration_minutes for t in closed_trades if t.duration_minutes]
+            avg_hold_hours = round(sum(hold_mins) / len(hold_mins) / 60, 2) if hold_mins else 0.0
+
+            # Per-symbol stats (all-time, min 2 trades)
+            per_symbol_raw: dict[str, list] = defaultdict(list)
+            for t in closed_trades:
+                per_symbol_raw[t.symbol].append(t)
+            per_symbol = []
+            for sym, trs in per_symbol_raw.items():
+                if len(trs) < 2:
+                    continue
+                wins = [t for t in trs if (t.profit or 0) > 0]
+                net = sum(t.profit or 0 for t in trs)
+                buy_total = sum(t.buy_value or 0 for t in trs) or 1.0
+                per_symbol.append({
+                    "symbol": sym,
+                    "trades": len(trs),
+                    "win_rate": round(len(wins) / len(trs) * 100, 1),
+                    "net_profit": round(net, 2),
+                    "avg_profit_pct": round(net / buy_total * 100, 2),
+                })
+            per_symbol.sort(key=lambda r: r["net_profit"], reverse=True)
+            top_symbols = per_symbol[:5]
+            worst_symbols = list(reversed(per_symbol[-5:])) if len(per_symbol) > 5 else []
+
+            # Exit reason breakdown — parse SELL Decision.reason for keywords
+            sell_decisions = session.execute(
+                select(Decision).where(
+                    Decision.decision == "SELL",
+                    Decision.timestamp >= cutoff_30d,
+                )
+            ).scalars().all()
+            reason_buckets = {"take_profit": 0, "stop_loss": 0, "trailing": 0, "partial": 0, "timeout": 0, "signal": 0, "other": 0}
+            for d in sell_decisions:
+                r = (d.reason or "").lower()
+                if "partial" in r or "czesciow" in r or "częściow" in r:
+                    reason_buckets["partial"] += 1
+                elif "trailing" in r or "traling" in r:
+                    reason_buckets["trailing"] += 1
+                elif "take profit" in r or "take_profit" in r or "cel zysku" in r or "tp" in r.split():
+                    reason_buckets["take_profit"] += 1
+                elif "stop" in r and "loss" in r or "stop-loss" in r or "sl" in r.split():
+                    reason_buckets["stop_loss"] += 1
+                elif "timeout" in r or "max hold" in r or "przetrzyman" in r:
+                    reason_buckets["timeout"] += 1
+                elif "score" in r or "signal" in r or "sygnal" in r or "sprzedaz" in r:
+                    reason_buckets["signal"] += 1
+                else:
+                    reason_buckets["other"] += 1
+
+            # Equity curve (30d) — cumulative net profit from closed trades sorted by closed_at
+            curve_trades = sorted(
+                [t for t in trades_30d if t.closed_at],
+                key=lambda t: t.closed_at,
+            )
+            equity_curve = []
+            cum = 0.0
+            for t in curve_trades:
+                cum += (t.profit or 0.0)
+                equity_curve.append({
+                    "t": t.closed_at.isoformat(),
+                    "pnl": round(cum, 2),
+                })
+
+            return JSONResponse({
+                "summary": summary,
+                "avg_hold_hours": avg_hold_hours,
+                "top_symbols": top_symbols,
+                "worst_symbols": worst_symbols,
+                "exit_reasons": reason_buckets,
+                "exit_reasons_total": sum(reason_buckets.values()),
+                "equity_curve": equity_curve,
+                "generated_at": now.isoformat(),
+            })
+    except Exception as exc:
+        logger.warning("learning insights failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.post("/api/paper/reset")
@@ -1465,6 +1599,14 @@ async def add_api_key(request: Request, body: AddAPIKeyRequest, user: User = Dep
         )
         if not success or api_key_obj is None:
             raise HTTPException(status_code=400, detail=message)
+        # Clear cached exchange client so new secret is picked up
+        try:
+            if body.exchange == "binance":
+                binance_service.clear_client(body.api_key, testnet=body.is_testnet)
+            elif body.exchange == "bybit":
+                bybit_service.clear_client(body.api_key, testnet=body.is_testnet)
+        except Exception:
+            pass
         return JSONResponse({"success": True, "key_id": api_key_obj.id})
 
 
@@ -1472,9 +1614,20 @@ async def add_api_key(request: Request, body: AddAPIKeyRequest, user: User = Dep
 async def delete_api_key(key_id: int, user: User = Depends(require_auth)) -> JSONResponse:
     """Delete an API key."""
     with SessionLocal() as session:
+        # Fetch key first to clear cache
+        keys = api_key_service.get_user_api_keys(session, user.id)
+        target = next((k for k in keys if k.id == key_id), None)
         deleted = api_key_service.delete_api_key(session, user_id=user.id, key_id=key_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Klucz API nie znaleziony")
+        try:
+            if target is not None:
+                if target.exchange == "binance":
+                    binance_service.clear_client(target.api_key, testnet=target.is_testnet)
+                elif target.exchange == "bybit":
+                    bybit_service.clear_client(target.api_key, testnet=target.is_testnet)
+        except Exception:
+            pass
         return JSONResponse({"success": True})
 
 

@@ -95,9 +95,9 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1z"/><path d="M16 2v4M8 2v4M2 10h20"/></svg>
                 <span>Portfel</span>
             </button>
-            <button class="nav-item" data-view="activity" title="Aktywnosc">
+            <button class="nav-item" data-view="activity" title="Aktywność">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
-                <span>Aktywnosc</span>
+                <span>Aktywność</span>
             </button>
             <button class="nav-item" data-view="ai" title="Czat z Agentem">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -106,6 +106,10 @@
             <button class="nav-item" data-view="calendar" title="Kalendarz">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                 <span>Kalendarz</span>
+            </button>
+            <button class="nav-item" data-view="insights" title="Analityka uczenia">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+                <span>Insights</span>
             </button>
             <button class="nav-item" data-view="settings" title="Status">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -123,18 +127,39 @@
         </div>
     </aside>
 
+    <!-- Mobile Page Menu -->
+    <div id="page-menu" class="page-menu">
+        <button id="menu-close-button" class="menu-close-btn" title="Zamknij menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <nav class="page-menu-nav">
+            <button class="page-menu-item" data-view="dashboard">Dashboard</button>
+            <button class="page-menu-item" data-view="market">Rynek</button>
+            <button class="page-menu-item" data-view="charts">Wykresy</button>
+            <button class="page-menu-item" data-view="portfolio">Portfel</button>
+            <button class="page-menu-item" data-view="activity">Aktywność</button>
+            <button class="page-menu-item" data-view="ai">Czat z Agentem</button>
+            <button class="page-menu-item" data-view="insights">Insights</button>
+            <button class="page-menu-item" data-view="settings">Status</button>
+        </nav>
+    </div>
+
     <!-- App Header -->
     <header class="app-header">
         <div class="header-left">
+            <button id="menu-toggle-button" class="header-btn menu-toggle-btn" title="Menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
             <h1 id="view-title">Dashboard</h1>
-            <span id="status-line" class="status-badge">Ladowanie...</span>
+            <span id="status-line" class="status-badge">Ładowanie...</span>
+            <span id="risk-badge" class="risk-badge hidden" title="Status Risk Managera">RISK</span>
         </div>
         <div class="header-right">
             <button id="run-cycle-button" class="header-btn primary" title="Uruchom cykl">
                 <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <span>Cykl</span>
             </button>
-            <button id="refresh-button" class="header-btn" title="Odswiez">
+            <button id="refresh-button" class="header-btn" title="Odśwież">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
             </button>
             <button id="scheduler-button" class="header-btn" title="Scheduler">
@@ -223,7 +248,7 @@
                 <!-- Metrics Row (desktop: all 9, mobile: compact 2x3 grid) -->
                 <div class="metrics-strip">
                     <div class="metric-tile">
-                        <span class="metric-label">Gotowka</span>
+                        <span class="metric-label">Gotówka</span>
                         <strong id="cash-balance" class="metric-value">-</strong>
                     </div>
                     <div class="metric-tile">
@@ -284,7 +309,7 @@
 
                     <div class="card summary-card">
                         <div class="card-header">
-                            <h3>Szybki podglad</h3>
+                            <h3>Szybki podgląd</h3>
                         </div>
                         <div class="card-body">
                             <div id="quick-summary" class="quick-summary-grid"></div>
@@ -404,7 +429,7 @@
                             <div id="learning-findings" class="stack-list compact"></div>
                             <h4 class="sub-header">Program nauki</h4>
                             <div id="learning-curriculum" class="stack-list compact"></div>
-                            <h4 class="sub-header">Nastepne kroki</h4>
+                            <h4 class="sub-header">Następne kroki</h4>
                             <div id="learning-next-steps" class="stack-list compact"></div>
                             <h4 class="sub-header">Baza wiedzy</h4>
                             <div id="learning-knowledge-base" class="stack-list compact"></div>
@@ -440,7 +465,7 @@
                     </div>
                     <div class="card">
                         <div class="card-header negative">
-                            <h3>Sprzedane ze strata</h3>
+                            <h3>Sprzedane ze stratą</h3>
                         </div>
                         <div class="card-body scrollable">
                             <div id="loss-trades-list" class="stack-list compact"></div>
@@ -466,7 +491,7 @@
 
                             <h4 class="sub-header">Otwarte pozycje</h4>
                             <div id="leverage-open-positions" class="stack-list compact"></div>
-                            <h4 class="sub-header">Ostatnie zamkniete</h4>
+                            <h4 class="sub-header">Ostatnie zamknięte</h4>
                             <div id="leverage-closed-trades" class="stack-list compact"></div>
                         </div>
                     </div>
@@ -518,6 +543,7 @@
                                 <button id="chat-clear-btn" class="small-btn ghost" title="Wyczyść czat">Wyczyść</button>
                             </div>
                         </div>
+                        <div id="ai-message" class="ai-insight-message hidden"></div>
                         <div class="card-body chat-body">
                             <div id="chat-messages" class="chat-messages">
                                 <div class="chat-msg agent">
@@ -762,6 +788,50 @@
                         <div class="card">
                             <div class="card-header"><h3>Podsumowanie roku</h3></div>
                             <div class="card-body" id="cal-year-summary"><p class="empty-state">—</p></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== INSIGHTS / ANALITYKA UCZENIA ===== -->
+        <section class="app-view" data-view="insights">
+            <div class="insights-page">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Analityka uczenia (Paper Trading)</h3>
+                        <button id="insights-refresh" class="header-btn" title="Odswiez">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="insights-summary" class="insights-summary-grid">
+                            <p class="empty-state">Ladowanie danych...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="insights-row">
+                    <div class="card">
+                        <div class="card-header"><h3>Top symbole (zyskowne)</h3></div>
+                        <div class="card-body" id="insights-top-symbols"><p class="empty-state">—</p></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h3>Najslabsze symbole</h3></div>
+                        <div class="card-body" id="insights-worst-symbols"><p class="empty-state">—</p></div>
+                    </div>
+                </div>
+
+                <div class="insights-row">
+                    <div class="card">
+                        <div class="card-header"><h3>Powody sprzedazy (30d)</h3></div>
+                        <div class="card-body" id="insights-exit-reasons"><p class="empty-state">—</p></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h3>Krzywa equity (30d)</h3></div>
+                        <div class="card-body">
+                            <svg id="insights-equity-curve" class="equity-curve" viewBox="0 0 400 120" preserveAspectRatio="none"></svg>
+                            <div id="insights-equity-meta" class="equity-meta"></div>
                         </div>
                     </div>
                 </div>
@@ -1092,7 +1162,7 @@
                         <h4>Podatek od zyskow (PIT)</h4>
                         <ul class="help-list">
                             <li>Zyski z kryptowalut podlegaja opodatkowaniu stawka <strong>19% PIT</strong> (art. 30b ustawy o PIT).</li>
-                            <li>Podatek rozliczasz <strong>raz w roku</strong> w zeznaniu PIT-38, termin: 30 kwietnia nastepnego roku.</li>
+                            <li>Podatek rozliczasz <strong>raz w roku</strong> w zeznaniu PIT-38, termin: 30 kwietnia następnego roku.</li>
                             <li>Przychod powstaje w momencie <strong>zamiany krypto na walute fiat</strong> (np. sprzedaz BTC za PLN) lub <strong>zamiany krypto na krypto</strong>.</li>
                             <li>Kosztem uzyskania przychodu jest cena zakupu krypto (prowizje Binance tez mozna odliczyc).</li>
                             <li>Strate mozna rozliczyc w ciagu <strong>5 nastepnych lat podatkowych</strong>.</li>

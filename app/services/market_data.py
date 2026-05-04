@@ -5,8 +5,6 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import requests
 from dateutil import parser
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import MarketData
@@ -61,13 +59,9 @@ def _preferred_rows_by_bucket(rows: list[MarketData]) -> list[MarketData]:
     return [row for _, row in sorted(preferred_by_bucket.items(), key=lambda item: item[0])]
 
 
-def load_symbol_market_rows(session: Session, symbol: str, limit: int | None = None) -> list[MarketData]:
+def load_symbol_market_rows(symbol: str, limit: int | None = None) -> list[MarketData]:
     if limit is None:
-        rows = session.execute(
-            select(MarketData)
-            .where(MarketData.symbol == symbol)
-            .order_by(MarketData.timestamp.asc(), MarketData.id.asc())
-        ).scalars().all()
+        rows = list(MarketData.objects.filter(symbol=symbol).order_by('timestamp', 'id'))
 
         return _preferred_rows_by_bucket(rows)
 
@@ -76,13 +70,7 @@ def load_symbol_market_rows(session: Session, symbol: str, limit: int | None = N
     preferred_by_bucket: dict[datetime, MarketData] = {}
 
     while len(preferred_by_bucket) < limit:
-        batch = session.execute(
-            select(MarketData)
-            .where(MarketData.symbol == symbol)
-            .order_by(MarketData.timestamp.desc(), MarketData.id.desc())
-            .offset(offset)
-            .limit(batch_size)
-        ).scalars().all()
+        batch = list(MarketData.objects.filter(symbol=symbol).order_by('-timestamp', '-id')[offset:offset + batch_size])
         if not batch:
             break
 
@@ -98,14 +86,9 @@ def load_symbol_market_rows(session: Session, symbol: str, limit: int | None = N
     return normalized[-limit:]
 
 
-def load_latest_market_row(session: Session, symbol: str) -> MarketData | None:
+def load_latest_market_row(symbol: str) -> MarketData | None:
     """Return the single most recent preferred MarketData row for *symbol*."""
-    row = session.execute(
-        select(MarketData)
-        .where(MarketData.symbol == symbol)
-        .order_by(MarketData.timestamp.desc(), MarketData.id.desc())
-        .limit(1)
-    ).scalars().first()
+    row = MarketData.objects.filter(symbol=symbol).order_by('-timestamp', '-id').first()
     return row
 
 
@@ -115,13 +98,13 @@ class MarketDataService:
         self.binance_base_url = "https://api.binance.com/api/v3"
         self.coinbase_base_url = "https://api.exchange.coinbase.com"
 
-    def update_symbol(self, session: Session, symbol: str) -> dict[str, float | str | datetime]:
+    def update_symbol(self, symbol: str) -> dict[str, float | str | datetime]:
         try:
             records = self._fetch_live_series(symbol)
         except (requests.RequestException, ValueError):
-            records = self._generate_demo_series(session, symbol)
+            records = self._generate_demo_series(symbol)
 
-        self._persist_records(session, symbol, records)
+        self._persist_records(symbol, records)
         latest = records[-1]
         return {
             "symbol": symbol,
@@ -280,7 +263,7 @@ class MarketDataService:
 
         return records
 
-    def _generate_demo_series(self, session: Session, symbol: str) -> list[dict[str, float | datetime | str]]:
+    def _generate_demo_series(self, symbol: str) -> list[dict[str, float | datetime | str]]:
         seed = sum(ord(char) for char in symbol)
         generator = np.random.default_rng(seed)
         # Realistic fallback prices (USD) for all tracked coins.
@@ -301,14 +284,9 @@ class MarketDataService:
 
         # If we already have real (non-demo) market data for this symbol,
         # use its last close price as the base to avoid wild price jumps.
-        last_real = session.execute(
-            select(MarketData.close)
-            .where(MarketData.symbol == symbol, MarketData.source != "demo")
-            .order_by(MarketData.timestamp.desc())
-            .limit(1)
-        ).scalar()
-        if last_real is not None and last_real > 0:
-            base_price = float(last_real)
+        last_real_row = MarketData.objects.filter(symbol=symbol).exclude(source="demo").order_by('-timestamp').first()
+        if last_real_row is not None and last_real_row.close > 0:
+            base_price = float(last_real_row.close)
         step = self._interval_delta()
         timestamp = datetime.utcnow() - step * settings.history_bars
         records: list[dict[str, float | datetime | str]] = []
@@ -335,7 +313,7 @@ class MarketDataService:
 
         return records
 
-    def _persist_records(self, session: Session, symbol: str, records: list[dict[str, float | datetime | str]]) -> None:
+    def _persist_records(self, symbol: str, records: list[dict[str, float | datetime | str]]) -> None:
         unique_records_by_key: dict[tuple[datetime, str], dict[str, float | datetime | str]] = {}
         for record in records:
             normalized_timestamp = normalize_market_timestamp(record["timestamp"])
@@ -348,9 +326,7 @@ class MarketDataService:
 
         normalized_records = sorted(unique_records_by_key.values(), key=lambda item: (item["timestamp"], str(item["source"])))
         timestamps = list({record["timestamp"] for record in normalized_records})
-        existing_rows = session.execute(
-            select(MarketData).where(MarketData.symbol == symbol, MarketData.timestamp.in_(timestamps))
-        ).scalars().all()
+        existing_rows = list(MarketData.objects.filter(symbol=symbol, timestamp__in=timestamps))
         existing_by_key = {(row.timestamp, row.source): row for row in existing_rows}
 
         for record in normalized_records:
@@ -362,19 +338,18 @@ class MarketDataService:
                 existing.low = record["low"]
                 existing.close = record["close"]
                 existing.volume = record["volume"]
+                existing.save()
                 continue
-            session.add(
-                MarketData(
-                    symbol=symbol,
-                    timestamp=record["timestamp"],
-                    open=record["open"],
-                    high=record["high"],
-                    low=record["low"],
-                    close=record["close"],
-                    volume=record["volume"],
-                    source=record["source"],
-                )
-            )
+            MarketData(
+                symbol=symbol,
+                timestamp=record["timestamp"],
+                open=record["open"],
+                high=record["high"],
+                low=record["low"],
+                close=record["close"],
+                volume=record["volume"],
+                source=record["source"],
+            ).save()
 
     def _coinbase_granularity(self) -> int:
         mapping = {

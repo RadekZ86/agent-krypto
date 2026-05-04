@@ -2,7 +2,7 @@
 
 ## Aktualna konfiguracja
 
-**URL aplikacji:** http://agentkrypto.magicparty.usermd.net  
+**URL aplikacji:** https://agentkrypto.apka.org.pl (alias: agentkrypto.magicparty.usermd.net)  
 **Serwer:** s84.mydevil.net  
 **Użytkownik:** MagicParty  
 **Port:** 12345  
@@ -113,7 +113,7 @@ ssh MagicParty@s84.mydevil.net "curl -s http://127.0.0.1:12345/"
 
 ### 2. Dodaj klucz w Agent Krypto
 
-1. Otwórz aplikację: **http://agentkrypto.magicparty.usermd.net**
+1. Otwórz aplikację: **https://agentkrypto.apka.org.pl**
 2. Zaloguj się na swoje konto
 3. Przejdź do **Status** (ikona zębatki w sidebar)
 4. W sekcji **Klucze API** kliknij **Dodaj klucz API**

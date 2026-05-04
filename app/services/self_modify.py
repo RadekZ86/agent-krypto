@@ -12,9 +12,6 @@ import json
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.models import RuntimeSetting, SignalPerformance
 from app.services.learning import LearningService
@@ -45,7 +42,7 @@ def is_admin(user) -> bool:
     return getattr(user, "email", None) == ADMIN_EMAIL
 
 
-def execute_command(session: Session, cmd: dict, user) -> dict:
+def execute_command(cmd: dict, user) -> dict:
     """Execute a self-modification command. Returns result dict.
 
     cmd format: {"tool": "...", "params": {...}}
@@ -66,19 +63,19 @@ def execute_command(session: Session, cmd: dict, user) -> dict:
 
     try:
         if tool == "set_param":
-            return _set_param(session, params)
+            return _set_param(params)
         elif tool == "get_params":
-            return _get_params(session)
+            return _get_params()
         elif tool == "set_agent_mode":
-            return _set_agent_mode(session, params)
+            return _set_agent_mode(params)
         elif tool == "get_learning_stats":
-            return _get_learning_stats(session)
+            return _get_learning_stats()
         elif tool == "get_signal_ranking":
-            return _get_signal_ranking(session)
+            return _get_signal_ranking()
         elif tool == "reset_signal_stats":
-            return _reset_signal_stats(session)
+            return _reset_signal_stats()
         elif tool == "get_adaptive_state":
-            return _get_adaptive_state(session)
+            return _get_adaptive_state()
         else:
             return {"ok": False, "error": f"Nieznane narzędzie: {tool}"}
     except Exception as exc:
@@ -88,7 +85,7 @@ def execute_command(session: Session, cmd: dict, user) -> dict:
 
 # ── Parameter override via RuntimeSetting ──
 
-def _set_param(session: Session, params: dict) -> dict:
+def _set_param(params: dict) -> dict:
     key = params.get("key", "")
     value = params.get("value")
     if key not in ALLOWED_OVERRIDES:
@@ -104,31 +101,27 @@ def _set_param(session: Session, params: dict) -> dict:
         return {"ok": False, "error": f"{key} musi być w zakresie [{min_val}, {max_val}], podano: {value}"}
 
     override_key = f"override_{key}"
-    row = session.execute(
-        select(RuntimeSetting).where(RuntimeSetting.key == override_key)
-    ).scalar_one_or_none()
+    row = RuntimeSetting.objects.filter(key=override_key).first()
 
     if row is None:
-        session.add(RuntimeSetting(key=override_key, value=str(value)))
+        RuntimeSetting(key=override_key, value=str(value)).save()
     else:
         row.value = str(value)
-    session.commit()
+        row.save()
 
     logger.info("SELF-MODIFY: %s = %s (by admin)", key, value)
     return {"ok": True, "message": f"Ustawiono {key} = {value}", "key": key, "value": value}
 
 
-def _get_params(session: Session) -> dict:
+def _get_params() -> dict:
     runtime = RuntimeStateService()
-    profile = runtime.get_active_profile(session)
+    profile = runtime.get_active_profile()
 
     # Show any manual overrides on top
     overrides = {}
     for key in ALLOWED_OVERRIDES:
         override_key = f"override_{key}"
-        row = session.execute(
-            select(RuntimeSetting).where(RuntimeSetting.key == override_key)
-        ).scalar_one_or_none()
+        row = RuntimeSetting.objects.filter(key=override_key).first()
         if row:
             overrides[key] = row.value
 
@@ -139,11 +132,11 @@ def _get_params(session: Session) -> dict:
     }
 
 
-def _set_agent_mode(session: Session, params: dict) -> dict:
+def _set_agent_mode(params: dict) -> dict:
     mode = params.get("mode", "").strip().lower()
     runtime = RuntimeStateService()
     try:
-        result = runtime.set_agent_mode(session, mode)
+        result = runtime.set_agent_mode(mode)
         return {"ok": True, "message": f"Tryb agenta zmieniony na: {result}"}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -151,33 +144,29 @@ def _set_agent_mode(session: Session, params: dict) -> dict:
 
 # ── Learning stats ──
 
-def _get_learning_stats(session: Session) -> dict:
+def _get_learning_stats() -> dict:
     learning = LearningService()
-    summary = learning.get_performance_summary(session)
+    summary = learning.get_performance_summary()
     return {"ok": True, **summary}
 
 
-def _get_signal_ranking(session: Session) -> dict:
+def _get_signal_ranking() -> dict:
     learning = LearningService()
-    rankings = learning.get_signal_rankings(session)
+    rankings = learning.get_signal_rankings()
     return {"ok": True, "signals": rankings, "count": len(rankings)}
 
 
-def _reset_signal_stats(session: Session) -> dict:
-    deleted = session.execute(select(SignalPerformance)).scalars().all()
-    count = len(deleted)
-    for row in deleted:
-        session.delete(row)
-    session.commit()
+def _reset_signal_stats() -> dict:
+    count, _ = SignalPerformance.objects.all().delete()
     logger.info("SELF-MODIFY: reset %d signal stats (by admin)", count)
     return {"ok": True, "message": f"Zresetowano statystyki {count} sygnałów."}
 
 
-def _get_adaptive_state(session: Session) -> dict:
+def _get_adaptive_state() -> dict:
     learning = LearningService()
-    adjustments = learning.get_adaptive_adjustments(session)
+    adjustments = learning.get_adaptive_adjustments()
     runtime = RuntimeStateService()
-    profile = runtime.get_active_profile(session)
+    profile = runtime.get_active_profile()
     return {
         "ok": True,
         "adaptive_active": adjustments is not None,
@@ -194,13 +183,11 @@ def _get_adaptive_state(session: Session) -> dict:
     }
 
 
-def apply_overrides_to_profile(session: Session, profile: dict) -> dict:
+def apply_overrides_to_profile(profile: dict) -> dict:
     """Apply any manual admin overrides stored in RuntimeSetting to the profile."""
     for key, (min_val, max_val, cast) in ALLOWED_OVERRIDES.items():
         override_key = f"override_{key}"
-        row = session.execute(
-            select(RuntimeSetting).where(RuntimeSetting.key == override_key)
-        ).scalar_one_or_none()
+        row = RuntimeSetting.objects.filter(key=override_key).first()
         if row is not None:
             try:
                 val = cast(row.value)

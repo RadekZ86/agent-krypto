@@ -765,6 +765,176 @@ async function renderDashboard() {
     const payload = await fetchDashboard();
     await applyDashboardPayload(payload, true);
     setStatus(`Ostatnie odswiezenie: ${new Date().toLocaleTimeString("pl-PL")}`);
+    // Odswiez badge statusu ryzyka rownolegle (nie blokuje dashboardu jezeli padnie)
+    refreshRiskBadge().catch(() => {});
+}
+
+async function refreshInsights() {
+    const summaryEl = document.getElementById("insights-summary");
+    const topEl = document.getElementById("insights-top-symbols");
+    const worstEl = document.getElementById("insights-worst-symbols");
+    const reasonsEl = document.getElementById("insights-exit-reasons");
+    const curveEl = document.getElementById("insights-equity-curve");
+    const metaEl = document.getElementById("insights-equity-meta");
+    if (!summaryEl) return;
+    summaryEl.innerHTML = '<p class="empty-state">Ladowanie danych...</p>';
+    try {
+        const resp = await fetch("/api/learning-insights", { cache: "no-store" });
+        if (!resp.ok) throw new Error("fetch failed");
+        const data = await resp.json();
+        // Summary cards
+        const s = data.summary || {};
+        const card = (title, obj) => {
+            const pnl = obj.net_profit || 0;
+            const pnlCls = pnl > 0 ? "positive" : (pnl < 0 ? "negative" : "");
+            return `
+                <div class="insights-stat-card">
+                    <h4>${title}</h4>
+                    <div class="insights-stat-row"><span class="lbl">Transakcje</span><span class="val">${obj.total || 0}</span></div>
+                    <div class="insights-stat-row"><span class="lbl">Win rate</span><span class="val">${(obj.win_rate || 0).toFixed(1)}%</span></div>
+                    <div class="insights-stat-row"><span class="lbl">Srednia %</span><span class="val ${pnlCls}">${(obj.avg_profit_pct || 0).toFixed(2)}%</span></div>
+                    <div class="insights-stat-row"><span class="lbl">Netto</span><span class="val ${pnlCls}">${(obj.net_profit || 0).toFixed(2)} PLN</span></div>
+                </div>`;
+        };
+        summaryEl.innerHTML = card("Ostatnie 7 dni", s.last_7d || {}) + card("Ostatnie 30 dni", s.last_30d || {}) + card("Calosc", s.all_time || {});
+        // Append avg hold info
+        if (data.avg_hold_hours != null || data.median_hold_minutes != null) {
+            const meta = document.createElement("div");
+            meta.style.cssText = "grid-column: 1 / -1; font-size: 12px; color: var(--text-dim); text-align: center; margin-top: 4px;";
+            const parts = [];
+            if (data.avg_hold_hours != null) parts.push(`Sredni czas trzymania: <b>${data.avg_hold_hours}h</b>`);
+            if (data.median_hold_minutes != null) parts.push(`mediana: <b>${data.median_hold_minutes} min</b>`);
+            if (data.under_30min_pct != null) {
+                const cls = data.under_30min_pct > 50 ? "negative" : "";
+                parts.push(`pod 30 min: <b class="${cls}">${data.under_30min_pct}%</b>`);
+            }
+            meta.innerHTML = parts.join(" | ");
+            summaryEl.appendChild(meta);
+        }
+        // Top / worst symbols
+        const renderSymTable = (rows) => {
+            if (!rows || !rows.length) return '<p class="empty-state">Brak danych (min. 2 transakcje/symbol)</p>';
+            const body = rows.map(r => {
+                const cls = r.net_profit > 0 ? "positive" : (r.net_profit < 0 ? "negative" : "");
+                return `<tr><td>${r.symbol}</td><td class="num">${r.trades}</td><td class="num">${r.win_rate.toFixed(1)}%</td><td class="num ${cls}">${r.avg_profit_pct.toFixed(2)}%</td><td class="num ${cls}">${r.net_profit.toFixed(2)}</td></tr>`;
+            }).join("");
+            return `<table class="insights-table"><thead><tr><th>Symbol</th><th class="num">Trans.</th><th class="num">WR</th><th class="num">Sr%</th><th class="num">Netto</th></tr></thead><tbody>${body}</tbody></table>`;
+        };
+        if (topEl) topEl.innerHTML = renderSymTable(data.top_symbols);
+        if (worstEl) worstEl.innerHTML = renderSymTable(data.worst_symbols);
+        // Exit reasons
+        if (reasonsEl) {
+            const reasons = data.exit_reasons || {};
+            const total = data.exit_reasons_total || 0;
+            if (!total) {
+                reasonsEl.innerHTML = '<p class="empty-state">Brak decyzji SELL w 30d</p>';
+            } else {
+                const labels = {
+                    take_profit: "Take Profit",
+                    stop_loss: "Stop Loss",
+                    trailing: "Trailing",
+                    partial: "Partial TP",
+                    timeout: "Timeout",
+                    rsi_overbought: "RSI wykupiony",
+                    bb_upper: "BB gorna",
+                    macd_bearish: "MACD bearish",
+                    divergence: "Dywergencja",
+                    top_probability: "Szczyt lokalny",
+                    momentum_loss: "Utrata momentum",
+                    vwap: "VWAP",
+                    whale_sell: "Wieloryb sell",
+                    other: "Inne",
+                };
+                const profitKinds = new Set(["take_profit", "trailing", "partial"]);
+                const lossKinds = new Set(["stop_loss", "timeout"]);
+                // Sort by count descending, skip zeros
+                const sortedKeys = Object.keys(labels)
+                    .filter(k => (reasons[k] || 0) > 0)
+                    .sort((a, b) => (reasons[b] || 0) - (reasons[a] || 0));
+                if (!sortedKeys.length) {
+                    reasonsEl.innerHTML = '<p class="empty-state">Brak decyzji SELL</p>';
+                } else {
+                    const rows = sortedKeys.map(k => {
+                        const n = reasons[k] || 0;
+                        const pct = total ? (n / total * 100) : 0;
+                        const cls = profitKinds.has(k) ? "profit" : (lossKinds.has(k) ? "loss" : "");
+                        return `<div class="exit-reason-bar"><span class="bar-label">${labels[k]}</span><div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div><span class="bar-count">${n} (${pct.toFixed(0)}%)</span></div>`;
+                    }).join("");
+                    reasonsEl.innerHTML = rows + `<div style="font-size:11px;color:var(--text-dim);text-align:right;margin-top:8px;">Lacznie decyzji SELL: ${total}</div>`;
+                }
+            }
+        }
+        // Equity curve
+        if (curveEl) {
+            const curve = data.equity_curve || [];
+            if (!curve.length) {
+                curveEl.innerHTML = '';
+                if (metaEl) metaEl.innerHTML = '<span class="lbl">Brak zamknietych pozycji w 30d</span>';
+            } else {
+                const W = 400, H = 120, PAD = 4;
+                const pnls = curve.map(p => p.pnl);
+                const minP = Math.min(0, ...pnls);
+                const maxP = Math.max(0, ...pnls);
+                const range = (maxP - minP) || 1;
+                const n = curve.length;
+                const x = (i) => PAD + (n === 1 ? (W - 2 * PAD) / 2 : i * (W - 2 * PAD) / (n - 1));
+                const y = (v) => H - PAD - ((v - minP) / range) * (H - 2 * PAD);
+                const linePts = curve.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.pnl).toFixed(1)}`).join(" ");
+                const areaPts = linePts + ` L${x(n-1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+                const zeroY = y(0).toFixed(1);
+                curveEl.innerHTML = `<path class="area" d="${areaPts}"/><line class="zero" x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}"/><path class="line" d="${linePts}"/>`;
+                if (metaEl) {
+                    const finalPnl = pnls[pnls.length - 1];
+                    const cls = finalPnl > 0 ? "positive" : (finalPnl < 0 ? "negative" : "");
+                    const firstT = new Date(curve[0].t).toLocaleDateString("pl-PL");
+                    const lastT = new Date(curve[n-1].t).toLocaleDateString("pl-PL");
+                    metaEl.innerHTML = `<span class="lbl">${firstT} → ${lastT}</span><span class="val ${cls}">${finalPnl.toFixed(2)} PLN (${n} transakcji)</span>`;
+                }
+            }
+        }
+    } catch (e) {
+        summaryEl.innerHTML = `<p class="empty-state">Blad: ${e.message}</p>`;
+    }
+}
+
+async function refreshRiskBadge() {
+    const badge = document.getElementById("risk-badge");
+    if (!badge) return;
+    try {
+        const resp = await fetch("/api/risk-status", { cache: "no-store" });
+        if (!resp.ok) throw new Error("risk-status failed");
+        const data = await resp.json();
+        const level = String(data.level || "NORMAL").toUpperCase();
+        badge.classList.remove("hidden", "level-NORMAL", "level-CAUTIOUS", "level-RISK_OFF", "level-HALT");
+        badge.classList.add(`level-${level}`);
+        const reasons = Array.isArray(data.reasons) ? data.reasons : [];
+        let label = `RISK: ${level}`;
+        if (level === "HALT" && reasons[0]) {
+            const m = reasons[0].match(/zostalo\s+([\d.]+)h/);
+            if (m) label = `HALT (${m[1]}h)`;
+        } else if (level === "RISK_OFF") {
+            label = "RISK-OFF";
+        } else if (level === "CAUTIOUS") {
+            label = "OSTROZNIE";
+        } else {
+            label = "OK";
+        }
+        badge.textContent = label;
+        const btcPct = typeof data.btc_change_1h_pct === "number" ? (data.btc_change_1h_pct * 100).toFixed(2) : "?";
+        const dailyPct = typeof data.daily_loss_pct === "number" ? (data.daily_loss_pct * 100).toFixed(2) : "?";
+        const streak = data.loss_streak ?? "?";
+        const tooltip = [
+            `Poziom: ${level}`,
+            `Kupno dozwolone: ${data.allow_new_buys ? "TAK" : "NIE"}`,
+            `BTC 1h: ${btcPct}%`,
+            `Dzisiejsza strata: ${dailyPct}%`,
+            `Loss streak: ${streak}`,
+            ...reasons.map(r => `• ${r}`),
+        ].join("\n");
+        badge.title = tooltip;
+    } catch (e) {
+        badge.classList.add("hidden");
+    }
 }
 
 function sleep(ms) {
@@ -3136,6 +3306,7 @@ const viewTitles = {
     activity: "Aktywnosc",
     ai: "Czat z Agentem",
     calendar: "Kalendarz",
+    insights: "Analityka uczenia",
     settings: "Status",
     help: "Pomoc"
 };
@@ -3183,6 +3354,9 @@ function switchView(viewName) {
     if (viewName === "calendar" && !window._calendarLoaded) {
         window._calendarLoaded = true;
         initCalendar();
+    }
+    if (viewName === "insights") {
+        refreshInsights().catch(() => {});
     }
     if (viewName === "charts") {
         // On mobile, charts view was display:none during initial render,
@@ -3443,6 +3617,14 @@ if (aiRefreshBtn) {
         } catch (error) {
             setStatus(error.message);
         }
+    });
+}
+
+// Insights refresh button
+const insightsRefreshBtn = document.getElementById("insights-refresh");
+if (insightsRefreshBtn) {
+    insightsRefreshBtn.addEventListener("click", () => {
+        refreshInsights().catch(e => setStatus(e.message));
     });
 }
 
@@ -3863,6 +4045,11 @@ renderDashboardWithRetry().catch((error) => setStatus(error.message));
 window.setInterval(() => {
     updateAgentPulseStrip();
 }, 1000);
+// Auto-refresh risk badge co 60s (niezaleznie od dashboard refresh)
+refreshRiskBadge().catch(() => {});
+window.setInterval(() => {
+    refreshRiskBadge().catch(() => {});
+}, 60000);
 
 // ==================== PWA Install Prompt ====================
 

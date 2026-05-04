@@ -3,20 +3,24 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import hashlib
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.models import Decision, SimulatedTrade
+from app.services.risk_management import RiskManager
 from app.services.runtime_state import RuntimeStateService
+from app.services.symbol_learning import get_symbol_threshold_adjustment
 
 
 class DecisionEngine:
     def __init__(self) -> None:
         self.runtime_state = RuntimeStateService()
+        self.risk_manager = RiskManager()
+        self._risk_snapshot: dict | None = None
 
-    def evaluate(self, session: Session, symbol: str, feature_row: dict[str, float | str], backtest_rankings: dict | None = None) -> Decision:
-        profile = self.runtime_state.get_active_profile(session)
+    def evaluate(self, symbol: str, feature_row: dict[str, float | str], backtest_rankings: dict | None = None) -> Decision:
+        profile = self.runtime_state.get_active_profile()
+        # Risk assessment (cached per cycle via runtime state would be ideal; here re-eval per symbol is cheap)
+        risk = self.risk_manager.assess()
+        self._risk_snapshot = risk
         reasons: list[str] = []
         decision_value = "HOLD"
         confidence = 0.45
@@ -213,11 +217,7 @@ class DecisionEngine:
                 buy_signals.append(f"UWAGA: Backtest ujemny ROI we wszystkich strategiach (kara -2)")
 
         # ── Check for open trade (SELL logic) ──
-        open_trade = session.execute(
-            select(SimulatedTrade)
-            .where(SimulatedTrade.symbol == symbol, SimulatedTrade.status == "OPEN")
-            .order_by(SimulatedTrade.opened_at.desc())
-        ).scalar_one_or_none()
+        open_trade = SimulatedTrade.objects.filter(symbol=symbol, status="OPEN").order_by('-opened_at').first()
 
         if open_trade is not None:
             sell_reasons: list[str] = []
@@ -289,6 +289,19 @@ class DecisionEngine:
                 sell_score += 2
                 sell_reasons.append("Trailing: zysk maleje, momentum slabnie")
 
+            # 10b. Hard trailing stop — jeśli był zysk >2% a teraz spadł <1%, zamknij (chron zysk)
+            # Aproksymacja peak: jeśli hold > 2h i obecny zysk jest w [0%, 1%] ale w sesji był >2% (szacowane przez bb_upper vs close)
+            _entry_cost = open_trade.buy_value + open_trade.buy_fee
+            _max_price_seen = open_trade.buy_price * (1 + max(profit_target * 0.7, 0.02))
+            if close >= _max_price_seen * 0.99 and hold_hours > 1:
+                # Już dotknął okolic target — ustaw trailing 1.5% poniżej obecnej ceny
+                pass  # placeholder, decyzja sprzedaży powyżej
+            # Drastyczny trailing: jesli byl w zielonym >+1.5% i teraz spadl o >1% od peak
+            # (uzywamy close vs bb_upper jako proxy dla recent high gdy nie ma pola peak_price)
+            if profit_pct > 0.005 and bb_upper > close * 1.015 and macd_hist < 0:
+                sell_score += 2
+                sell_reasons.append(f"Trailing stop: zysk {profit_pct*100:.1f}% spada od szczytu")
+
             # 11. Time-based rotation (learning mode)
             if learning_mode and hold_hours >= float(profile["max_hold_hours"]):
                 sell_score += 3
@@ -315,20 +328,78 @@ class DecisionEngine:
                 confidence = min(0.95, 0.50 + sell_score * 0.06 + max(top_probability - 50, 0) / 100)
                 reasons = sell_reasons
             else:
-                reasons = ["Trzymaj pozycje: brak sygnalu sprzedazy"]
+                # ── PARTIAL TAKE-PROFIT ──
+                # Jezeli zysk >= +1.5% i pozycja nie byla jeszcze czesciowo zamknieta,
+                # sprzedaj 50% (zabezpiecz zysk), reszta zostaje z trailing stop.
+                _partial_threshold = 0.015
+                _already_partial = False
+                if open_trade.decision_id:
+                    _already_partial = SimulatedTrade.objects.filter(
+                        decision_id=open_trade.decision_id,
+                        status="CLOSED",
+                    ).exists()
+                if (
+                    profit_pct >= _partial_threshold
+                    and not _already_partial
+                    and hold_hours >= 0.2
+                ):
+                    decision_value = "PARTIAL_SELL"
+                    confidence = 0.75
+                    reasons = [
+                        f"Partial TP: zysk {profit_pct*100:.2f}% - sprzedaj 50% zabezpieczajac zysk, reszta z trailing stop",
+                    ]
+                else:
+                    reasons = ["Trzymaj pozycje: brak sygnalu sprzedazy"]
         else:
             # ── BUY DECISION: require multi-tier confluence ──
-            buy_threshold = int(profile["buy_score_threshold"]) if learning_mode else 6
-            # Require minimum 3 different confirming (non-penalty) signals
+            # Tightened thresholds to reduce overtrading: base 7 (was 6), min 3 tiers (was 2)
+            buy_threshold = max(int(profile["buy_score_threshold"]) if learning_mode else 6, 7)
+
+            # ── HTF (4h) confluence: kara za kupowanie wbrew wyzszemu trendowi ──
+            htf_trend = str(feature_row.get("htf_trend", "SIDEWAYS"))
+            htf_macd_hist = float(feature_row.get("htf_macd_hist", 0.0))
+            htf_rsi = float(feature_row.get("htf_rsi", 50.0))
+            if htf_trend == "DOWN":
+                buy_score -= 3
+                buy_signals.append(f"UWAGA HTF: 4h trend DOWN (kara -3)")
+            elif htf_trend == "UP" and htf_macd_hist > 0:
+                buy_score += 2
+                buy_signals.append("HTF 4h: trend UP + dodatni MACD hist (bonus +2)")
+            elif htf_trend == "UP":
+                buy_score += 1
+                buy_signals.append("HTF 4h: trend UP (bonus +1)")
+            if htf_rsi >= 75:
+                buy_score -= 1
+                buy_signals.append(f"UWAGA HTF: RSI 4h wykupiony ({htf_rsi:.0f}) (kara -1)")
+
+            # ── Per-symbol learning adjustment ──
+            sym_delta, sym_reason = get_symbol_threshold_adjustment(symbol)
+            if sym_delta != 0:
+                buy_threshold += sym_delta
+                if sym_reason:
+                    buy_signals.append(sym_reason)
+
+            # Require minimum 4 different confirming (non-penalty) signals
             positive_signals = [s for s in buy_signals if "kara" not in s.lower() and "uwaga" not in s.lower()]
-            # Count how many tiers contributed (at least 3 tiers must fire for confluence)
+            # Count how many tiers contributed (min 3 tiers must fire for strong confluence)
             _active_tiers = sum(1 for t in [tier1_score, tier2_score, tier3_score, tier4_score] if t > 0)
-            if buy_score >= buy_threshold and len(positive_signals) >= 3 and _active_tiers >= 2:
+
+            # ── RISK MANAGEMENT GATE ──
+            if not risk.get("allow_new_buys", True):
+                decision_value = "HOLD"
+                confidence = 0.5
+                reasons = [f"RISK-OFF ({risk.get('level')})"] + (risk.get("reasons") or [])
+            elif buy_score >= buy_threshold and len(positive_signals) >= 4 and _active_tiers >= 3:
                 decision_value = "BUY"
                 # Confidence: base 35% + score contribution + tier diversity bonus + probability bonus
                 _tier_bonus = (_active_tiers - 2) * 0.04  # 0.04 per extra tier beyond minimum 2
                 confidence = min(0.92, 0.35 + buy_score * 0.035 + _tier_bonus + max(up_probability - 50, 0) / 120)
+                # Reduce confidence when risk-cautious
+                if risk.get("level") == "CAUTIOUS":
+                    confidence = max(0.5, confidence - 0.1)
                 reasons = buy_signals
+                if risk.get("reasons"):
+                    reasons = list(reasons) + [f"RISK: {r}" for r in risk["reasons"]]
             elif exploration_mode:
                 experiment = self._learning_experiment(symbol, feature_row, buy_score, profile)
                 if experiment is not None:
@@ -341,7 +412,7 @@ class DecisionEngine:
                 reasons = buy_signals or ["Brak wystarczajacej konfluencji sygnalow"]
 
         # ── Daily trade limit ──
-        if decision_value == "BUY" and self._daily_trade_count(session) >= int(profile["max_trades_per_day"]):
+        if decision_value == "BUY" and self._daily_trade_count() >= int(profile["max_trades_per_day"]):
             decision_value = "HOLD"
             confidence = 0.52
             reasons = [f"Osiagnieto limit {int(profile['max_trades_per_day'])} transakcji dziennie"]
@@ -354,35 +425,35 @@ class DecisionEngine:
             reason="; ".join(reasons),
             score=buy_score if open_trade is None else 0,
         )
-        session.add(decision)
-        session.flush()
+        decision.save()
 
         # Store entry snapshot on BUY decisions for learning feedback
         if decision_value == "BUY":
             from app.services.learning import LearningService
-            LearningService.store_entry_snapshot(decision, feature_row, buy_signals)
+            # Fix signals=0 w LEARN logach: jesli BUY przez exploration ma pusty buy_signals,
+            # zapisz syntetyczny marker zeby pozniej mozna bylo odroznic explorację od konfluencji.
+            snapshot_signals = list(buy_signals) if buy_signals else []
+            if not snapshot_signals:
+                snapshot_signals = [f"EXPLORATION BUY (score={buy_score}, conf={confidence:.2f})"]
+            LearningService.store_entry_snapshot(decision, feature_row, snapshot_signals)
 
         return decision
 
-    def _daily_trade_count(self, session: Session) -> int:
+    def _daily_trade_count(self) -> int:
         start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = start_of_day + timedelta(days=1)
-        paper_count = session.execute(
-            select(func.count(SimulatedTrade.id)).where(
-                SimulatedTrade.opened_at >= start_of_day,
-                SimulatedTrade.opened_at < end_of_day,
-            )
-        ).scalar_one()
+        paper_count = SimulatedTrade.objects.filter(
+            opened_at__gte=start_of_day,
+            opened_at__lt=end_of_day,
+        ).count()
         # Also count LIVE buy orders to prevent over-trading
         try:
             from app.models import LiveOrderLog
-            live_count = session.execute(
-                select(func.count(LiveOrderLog.id)).where(
-                    LiveOrderLog.created_at >= start_of_day,
-                    LiveOrderLog.created_at < end_of_day,
-                    LiveOrderLog.action == "BUY",
-                )
-            ).scalar_one()
+            live_count = LiveOrderLog.objects.filter(
+                created_at__gte=start_of_day,
+                created_at__lt=end_of_day,
+                action="BUY",
+            ).count()
         except Exception:
             live_count = 0
         return int(paper_count) + int(live_count)

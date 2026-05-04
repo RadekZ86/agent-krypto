@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import math
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from app.models import FeatureSnapshot
 from app.services.analysis_frame import build_indicator_frame
 from app.services.market_data import load_symbol_market_rows
@@ -22,8 +19,8 @@ class IndicatorService:
     def __init__(self) -> None:
         self.probability_engine = ProbabilityEngine()
 
-    def compute_for_symbol(self, session: Session, symbol: str) -> dict[str, float | str] | None:
-        rows = load_symbol_market_rows(session, symbol)
+    def compute_for_symbol(self, symbol: str) -> dict[str, float | str] | None:
+        rows = load_symbol_market_rows(symbol)
         if len(rows) < 35:
             return None
 
@@ -41,15 +38,12 @@ class IndicatorService:
         trend = str(latest["trend"])
         probabilities = self.probability_engine.estimate(latest, previous)
 
-        feature = session.execute(
-            select(FeatureSnapshot).where(
-                FeatureSnapshot.symbol == symbol,
-                FeatureSnapshot.timestamp == latest["timestamp"],
-            )
-        ).scalar_one_or_none()
+        feature = FeatureSnapshot.objects.filter(
+            symbol=symbol,
+            timestamp=latest["timestamp"],
+        ).first()
         if feature is None:
             feature = FeatureSnapshot(symbol=symbol, timestamp=latest["timestamp"])
-            session.add(feature)
 
         feature.rsi = float(latest["rsi"])
         feature.macd = float(latest["macd"])
@@ -58,6 +52,7 @@ class IndicatorService:
         feature.ema50 = float(latest["ema50"])
         feature.trend = trend
         feature.volume_change = float(latest["volume_change"])
+        feature.save()
 
         return {
             "symbol": symbol,
@@ -109,6 +104,10 @@ class IndicatorService:
             "price_change_pct": float(latest.get("price_change_pct", 0)) if not _isnan(latest.get("price_change_pct", 0)) else 0.0,
             "range_ratio": float(latest.get("range_ratio", 1)) if not _isnan(latest.get("range_ratio", 1)) else 1.0,
             "obv_divergence": _detect_obv_div(df),
+            # Higher Timeframe (4h) confluence
+            "htf_trend": str(latest.get("htf_trend", "SIDEWAYS")),
+            "htf_rsi": float(latest.get("htf_rsi", 50.0)) if not _isnan(latest.get("htf_rsi", 50.0)) else 50.0,
+            "htf_macd_hist": float(latest.get("htf_macd_hist", 0.0)) if not _isnan(latest.get("htf_macd_hist", 0.0)) else 0.0,
         }
 
 

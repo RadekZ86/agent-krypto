@@ -4,8 +4,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from django.db.models import Count, Sum
 
 from app.models import Decision, LearningLog, SignalPerformance, SimulatedTrade
 
@@ -37,14 +36,22 @@ class LearningService:
             "close": float(feature_row.get("close", 0)),
             "volume_change": float(feature_row.get("volume_change", 0)),
             "whale_signal": str(feature_row.get("whale_signal", "NONE")),
+            # HTF snapshot for learning context
+            "htf_trend": str(feature_row.get("htf_trend", "")),
+            "htf_rsi": float(feature_row.get("htf_rsi", 50)),
         }
         decision.signals_json = json.dumps(snapshot, ensure_ascii=False)
+        # BUGFIX: persist signals_json to DB (previously mutation was lost because Decision
+        # was already saved in decision_engine before this call).
+        try:
+            decision.save(update_fields=["signals_json"])
+        except Exception:
+            logger.exception("store_entry_snapshot: save failed for decision %s", getattr(decision, "id", None))
 
     # ── Trade result logging with full context ──
 
     def log_trade_result(
         self,
-        session: Session,
         trade: SimulatedTrade,
         market_state: str,
         notes: str,
@@ -65,7 +72,7 @@ class LearningService:
         entry_snapshot = {}
         entry_signals: list[str] = []
         if trade.decision_id:
-            buy_decision = session.get(Decision, trade.decision_id)
+            buy_decision = Decision.objects.filter(pk=trade.decision_id).first()
             if buy_decision and buy_decision.signals_json:
                 try:
                     entry_snapshot = json.loads(buy_decision.signals_json)
@@ -96,10 +103,10 @@ class LearningService:
             exit_trend=str(exit_feature_row.get("trend", "")) if exit_feature_row else None,
             exit_up_prob=float(exit_feature_row.get("up_probability", 50)) if exit_feature_row else None,
         )
-        session.add(log_entry)
+        log_entry.save()
 
         # Update per-signal performance stats
-        self._update_signal_performance(session, entry_signals, was_profitable, profit_pct)
+        self._update_signal_performance(entry_signals, was_profitable, profit_pct)
 
         logger.info(
             "LEARN %s: %s pnl=%.2f%% hold=%.1fh signals=%d entry_rsi=%.0f exit_rsi=%.0f",
@@ -111,7 +118,6 @@ class LearningService:
 
     def log_live_trade_result(
         self,
-        session: Session,
         symbol: str,
         result: str,
         profit_pct: float,
@@ -119,22 +125,20 @@ class LearningService:
         notes: str,
     ) -> None:
         """Log a LIVE trade outcome for learning (no SimulatedTrade needed)."""
-        session.add(
-            LearningLog(
-                decision_id=None,
-                result=result,
-                was_profitable=profit_pct > 0,
-                market_state=market_state,
-                notes=f"[LIVE {symbol}] pnl={profit_pct:.2f}% | {notes}",
-                symbol=symbol,
-                profit_pct=round(profit_pct, 4),
-            )
-        )
+        LearningLog(
+            decision_id=None,
+            result=result,
+            was_profitable=profit_pct > 0,
+            market_state=market_state,
+            notes=f"[LIVE {symbol}] pnl={profit_pct:.2f}% | {notes}",
+            symbol=symbol,
+            profit_pct=round(profit_pct, 4),
+        ).save()
 
     # ── Signal performance tracking ──
 
     def _update_signal_performance(
-        self, session: Session, signals: list[str], was_win: bool, profit_pct: float,
+        self, signals: list[str], was_win: bool, profit_pct: float,
     ) -> None:
         """Update win/loss stats for each signal that fired at entry."""
         for raw_signal in signals:
@@ -143,9 +147,7 @@ class LearningService:
             if not signal_name:
                 continue
 
-            row = session.execute(
-                select(SignalPerformance).where(SignalPerformance.signal_name == signal_name)
-            ).scalar_one_or_none()
+            row = SignalPerformance.objects.filter(signal_name=signal_name).first()
 
             if row is None:
                 row = SignalPerformance(
@@ -155,7 +157,7 @@ class LearningService:
                     losses=0 if was_win else 1,
                     avg_profit_pct=profit_pct,
                 )
-                session.add(row)
+                row.save()
             else:
                 row.total_fired += 1
                 if was_win:
@@ -166,19 +168,15 @@ class LearningService:
                 row.avg_profit_pct = (
                     row.avg_profit_pct * (row.total_fired - 1) + profit_pct
                 ) / row.total_fired
+                row.save()
 
     # ── Adaptive feedback: compute threshold adjustments ──
 
-    def get_adaptive_adjustments(self, session: Session) -> dict[str, float] | None:
+    def get_adaptive_adjustments(self) -> dict[str, float] | None:
         """Compute threshold adjustments based on recent trade performance.
         Returns None if insufficient data (< MIN_TRADES_FOR_ADAPTATION trades).
         Otherwise returns dict with delta adjustments for profile thresholds."""
-        recent_logs = session.execute(
-            select(LearningLog)
-            .where(LearningLog.profit_pct.isnot(None))
-            .order_by(LearningLog.timestamp.desc())
-            .limit(ADAPTATION_WINDOW)
-        ).scalars().all()
+        recent_logs = list(LearningLog.objects.filter(profit_pct__isnull=False).order_by('-timestamp')[:ADAPTATION_WINDOW])
 
         if len(recent_logs) < MIN_TRADES_FOR_ADAPTATION:
             return None
@@ -220,13 +218,9 @@ class LearningService:
 
     # ── Signal quality rankings ──
 
-    def get_signal_rankings(self, session: Session) -> list[dict]:
+    def get_signal_rankings(self) -> list[dict]:
         """Return signals ranked by win rate (only those with enough samples)."""
-        rows = session.execute(
-            select(SignalPerformance)
-            .where(SignalPerformance.total_fired >= MIN_SIGNAL_SAMPLES)
-            .order_by(SignalPerformance.wins.desc())
-        ).scalars().all()
+        rows = list(SignalPerformance.objects.filter(total_fired__gte=MIN_SIGNAL_SAMPLES).order_by('-wins'))
 
         rankings = []
         for r in rows:
@@ -242,21 +236,17 @@ class LearningService:
         rankings.sort(key=lambda x: x["win_rate"], reverse=True)
         return rankings
 
-    def get_performance_summary(self, session: Session) -> dict:
+    def get_performance_summary(self) -> dict:
         """Quick summary of recent learning performance."""
-        total = session.execute(select(func.count(LearningLog.id))).scalar_one()
-        recent_30d = session.execute(
-            select(func.count(LearningLog.id)).where(
-                LearningLog.timestamp >= datetime.utcnow() - timedelta(days=30)
-            )
-        ).scalar_one()
-        wins_30d = session.execute(
-            select(func.count(LearningLog.id)).where(
-                LearningLog.timestamp >= datetime.utcnow() - timedelta(days=30),
-                LearningLog.was_profitable == True,
-            )
-        ).scalar_one()
-        adjustments = self.get_adaptive_adjustments(session)
+        total = LearningLog.objects.count()
+        recent_30d = LearningLog.objects.filter(
+            timestamp__gte=datetime.utcnow() - timedelta(days=30)
+        ).count()
+        wins_30d = LearningLog.objects.filter(
+            timestamp__gte=datetime.utcnow() - timedelta(days=30),
+            was_profitable=True,
+        ).count()
+        adjustments = self.get_adaptive_adjustments()
         return {
             "total_logged_trades": total,
             "trades_last_30d": recent_30d,

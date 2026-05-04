@@ -4,281 +4,286 @@ from datetime import datetime
 import hashlib
 import secrets
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.database import Base
+from django.db import models
 
 
-class User(Base):
+class User(models.Model):
     """User account for multi-user support."""
-    __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(128))
-    salt: Mapped[str] = mapped_column(String(32))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    trading_mode: Mapped[str] = mapped_column(String(16), default="PAPER")  # PAPER or LIVE
-    agent_mode: Mapped[str] = mapped_column(String(16), default="normal")  # cautious/normal/risky
-    live_alloc_mode: Mapped[str] = mapped_column(String(16), default="percent")  # percent / fixed / max
-    live_alloc_value: Mapped[float] = mapped_column(Float, default=10.0)  # percent %, fixed PLN, ignored for max
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    last_login: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    
-    api_keys: Mapped[list[UserAPIKey]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    sessions: Mapped[list[UserSession]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    class Meta:
+        db_table = "users"
+
+    email = models.CharField(max_length=255, unique=True, db_index=True)
+    username = models.CharField(max_length=64, unique=True, db_index=True)
+    password_hash = models.CharField(max_length=128)
+    salt = models.CharField(max_length=32)
+    is_active = models.BooleanField(default=True)
+    trading_mode = models.CharField(max_length=16, default="PAPER")
+    agent_mode = models.CharField(max_length=16, default="normal")
+    live_alloc_mode = models.CharField(max_length=16, default="percent")
+    live_alloc_value = models.FloatField(default=10.0)
+    created_at = models.DateTimeField(default=datetime.utcnow)
+    last_login = models.DateTimeField(null=True, blank=True)
 
     def set_password(self, password: str) -> None:
         self.salt = secrets.token_hex(16)
         self.password_hash = hashlib.sha256((password + self.salt).encode()).hexdigest()
-    
+
     def check_password(self, password: str) -> bool:
         return self.password_hash == hashlib.sha256((password + self.salt).encode()).hexdigest()
 
 
-class UserAPIKey(Base):
+class UserAPIKey(models.Model):
     """Binance API keys per user."""
-    __tablename__ = "user_api_keys"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    exchange: Mapped[str] = mapped_column(String(32), default="binance")
-    label: Mapped[str] = mapped_column(String(64))  # e.g. "Main Account", "Trading Bot"
-    api_key: Mapped[str] = mapped_column(String(128))
-    api_secret_encrypted: Mapped[str] = mapped_column(String(256))  # Encrypted
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_testnet: Mapped[bool] = mapped_column(Boolean, default=False)
-    permissions: Mapped[str] = mapped_column(String(64), default="read")  # read, trade, withdraw
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    last_used: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    
-    user: Mapped[User] = relationship(back_populates="api_keys")
+    class Meta:
+        db_table = "user_api_keys"
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="api_keys", db_index=True)
+    exchange = models.CharField(max_length=32, default="binance")
+    label = models.CharField(max_length=64)
+    api_key = models.CharField(max_length=128)
+    api_secret_encrypted = models.CharField(max_length=256)
+    is_active = models.BooleanField(default=True)
+    is_testnet = models.BooleanField(default=False)
+    permissions = models.CharField(max_length=64, default="read")
+    created_at = models.DateTimeField(default=datetime.utcnow)
+    last_used = models.DateTimeField(null=True, blank=True)
 
 
-class UserSession(Base):
+class UserSession(models.Model):
     """Active user sessions."""
-    __tablename__ = "user_sessions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime)
-    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
-    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    
-    user: Mapped[User] = relationship(back_populates="sessions")
+    class Meta:
+        db_table = "user_sessions"
 
-
-class MarketData(Base):
-    __tablename__ = "market_data"
-    __table_args__ = (UniqueConstraint("symbol", "timestamp", "source", name="uq_market_data_symbol_timestamp_source"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
-    open: Mapped[float] = mapped_column(Float)
-    high: Mapped[float] = mapped_column(Float)
-    low: Mapped[float] = mapped_column(Float)
-    close: Mapped[float] = mapped_column(Float)
-    volume: Mapped[float] = mapped_column(Float)
-    source: Mapped[str] = mapped_column(String(32), default="coingecko")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sessions", db_index=True)
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(default=datetime.utcnow)
+    expires_at = models.DateTimeField()
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    user_agent = models.CharField(max_length=256, null=True, blank=True)
 
 
-class FeatureSnapshot(Base):
-    __tablename__ = "features"
-    __table_args__ = (UniqueConstraint("symbol", "timestamp", name="uq_features_symbol_timestamp"),)
+class MarketData(models.Model):
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
-    rsi: Mapped[float] = mapped_column(Float)
-    macd: Mapped[float] = mapped_column(Float)
-    macd_signal: Mapped[float] = mapped_column(Float)
-    ema20: Mapped[float] = mapped_column(Float)
-    ema50: Mapped[float] = mapped_column(Float)
-    trend: Mapped[str] = mapped_column(String(16))
-    volume_change: Mapped[float] = mapped_column(Float)
+    class Meta:
+        db_table = "market_data"
+        constraints = [
+            models.UniqueConstraint(fields=["symbol", "timestamp", "source"], name="uq_market_data_symbol_timestamp_source"),
+        ]
 
-
-class Decision(Base):
-    __tablename__ = "decisions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, index=True, default=datetime.utcnow)
-    decision: Mapped[str] = mapped_column(String(16))
-    confidence: Mapped[float] = mapped_column(Float)
-    reason: Mapped[str] = mapped_column(Text)
-    score: Mapped[int] = mapped_column(Integer, default=0)
-    signals_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    trades: Mapped[list[SimulatedTrade]] = relationship(back_populates="decision")
+    symbol = models.CharField(max_length=16, db_index=True)
+    timestamp = models.DateTimeField(db_index=True)
+    open = models.FloatField()
+    high = models.FloatField()
+    low = models.FloatField()
+    close = models.FloatField()
+    volume = models.FloatField()
+    source = models.CharField(max_length=32, default="coingecko")
 
 
-class SimulatedTrade(Base):
-    __tablename__ = "simulated_trades"
+class FeatureSnapshot(models.Model):
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    decision_id: Mapped[int | None] = mapped_column(ForeignKey("decisions.id"), nullable=True)
-    buy_price: Mapped[float] = mapped_column(Float)
-    sell_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    quantity: Mapped[float] = mapped_column(Float)
-    buy_value: Mapped[float] = mapped_column(Float)
-    sell_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    buy_fee: Mapped[float] = mapped_column(Float)
-    sell_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
-    profit: Mapped[float | None] = mapped_column(Float, nullable=True)
-    duration_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(String(16), default="OPEN", index=True)
-    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    class Meta:
+        db_table = "features"
+        constraints = [
+            models.UniqueConstraint(fields=["symbol", "timestamp"], name="uq_features_symbol_timestamp"),
+        ]
 
-    decision: Mapped[Decision | None] = relationship(back_populates="trades")
+    symbol = models.CharField(max_length=16, db_index=True)
+    timestamp = models.DateTimeField(db_index=True)
+    rsi = models.FloatField()
+    macd = models.FloatField()
+    macd_signal = models.FloatField()
+    ema20 = models.FloatField()
+    ema50 = models.FloatField()
+    trend = models.CharField(max_length=16)
+    volume_change = models.FloatField()
 
 
-class LearningLog(Base):
-    __tablename__ = "learning_log"
+class Decision(models.Model):
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    decision_id: Mapped[int | None] = mapped_column(ForeignKey("decisions.id"), nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    result: Mapped[str] = mapped_column(String(32))
-    was_profitable: Mapped[bool] = mapped_column()
-    market_state: Mapped[str] = mapped_column(String(32))
-    notes: Mapped[str] = mapped_column(Text)
-    # Extended learning fields
-    symbol: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
-    profit_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
-    hold_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
-    entry_signals_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    entry_rsi: Mapped[float | None] = mapped_column(Float, nullable=True)
-    entry_macd_hist: Mapped[float | None] = mapped_column(Float, nullable=True)
-    entry_trend: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    entry_up_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
-    entry_bb_pos: Mapped[float | None] = mapped_column(Float, nullable=True)
-    exit_rsi: Mapped[float | None] = mapped_column(Float, nullable=True)
-    exit_macd_hist: Mapped[float | None] = mapped_column(Float, nullable=True)
-    exit_trend: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    exit_up_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    class Meta:
+        db_table = "decisions"
+
+    symbol = models.CharField(max_length=16, db_index=True)
+    timestamp = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    decision = models.CharField(max_length=16)
+    confidence = models.FloatField()
+    reason = models.TextField()
+    score = models.IntegerField(default=0)
+    signals_json = models.TextField(null=True, blank=True)
 
 
-class SignalPerformance(Base):
+class SimulatedTrade(models.Model):
+
+    class Meta:
+        db_table = "simulated_trades"
+
+    symbol = models.CharField(max_length=16, db_index=True)
+    decision = models.ForeignKey(Decision, on_delete=models.SET_NULL, null=True, blank=True, related_name="trades")
+    buy_price = models.FloatField()
+    sell_price = models.FloatField(null=True, blank=True)
+    quantity = models.FloatField()
+    buy_value = models.FloatField()
+    sell_value = models.FloatField(null=True, blank=True)
+    buy_fee = models.FloatField()
+    sell_fee = models.FloatField(null=True, blank=True)
+    profit = models.FloatField(null=True, blank=True)
+    duration_minutes = models.FloatField(null=True, blank=True)
+    status = models.CharField(max_length=16, default="OPEN", db_index=True)
+    opened_at = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+
+class LearningLog(models.Model):
+
+    class Meta:
+        db_table = "learning_log"
+
+    decision_id = models.IntegerField(null=True, blank=True)
+    timestamp = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    result = models.CharField(max_length=32)
+    was_profitable = models.BooleanField()
+    market_state = models.CharField(max_length=32)
+    notes = models.TextField()
+    symbol = models.CharField(max_length=16, null=True, blank=True, db_index=True)
+    profit_pct = models.FloatField(null=True, blank=True)
+    hold_hours = models.FloatField(null=True, blank=True)
+    entry_signals_json = models.TextField(null=True, blank=True)
+    entry_rsi = models.FloatField(null=True, blank=True)
+    entry_macd_hist = models.FloatField(null=True, blank=True)
+    entry_trend = models.CharField(max_length=16, null=True, blank=True)
+    entry_up_prob = models.FloatField(null=True, blank=True)
+    entry_bb_pos = models.FloatField(null=True, blank=True)
+    exit_rsi = models.FloatField(null=True, blank=True)
+    exit_macd_hist = models.FloatField(null=True, blank=True)
+    exit_trend = models.CharField(max_length=16, null=True, blank=True)
+    exit_up_prob = models.FloatField(null=True, blank=True)
+
+
+class SignalPerformance(models.Model):
     """Tracks win/loss rate per buy signal for learning feedback."""
-    __tablename__ = "signal_performance"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    signal_name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    total_fired: Mapped[int] = mapped_column(Integer, default=0)
-    wins: Mapped[int] = mapped_column(Integer, default=0)
-    losses: Mapped[int] = mapped_column(Integer, default=0)
-    avg_profit_pct: Mapped[float] = mapped_column(Float, default=0.0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    class Meta:
+        db_table = "signal_performance"
+
+    signal_name = models.CharField(max_length=128, unique=True, db_index=True)
+    total_fired = models.IntegerField(default=0)
+    wins = models.IntegerField(default=0)
+    losses = models.IntegerField(default=0)
+    avg_profit_pct = models.FloatField(default=0.0)
+    updated_at = models.DateTimeField(auto_now=True)
 
 
-class WhaleAlert(Base):
+class WhaleAlert(models.Model):
     """Detected whale/anomaly events for later analysis."""
-    __tablename__ = "whale_alerts"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    signal_type: Mapped[str] = mapped_column(String(32))  # WHALE_BUY, SPIKE_DOWN, etc.
-    whale_score: Mapped[float] = mapped_column(Float)
-    vol_zscore: Mapped[float] = mapped_column(Float, default=0)
-    vol_ratio: Mapped[float] = mapped_column(Float, default=1)
-    price_change_pct: Mapped[float] = mapped_column(Float, default=0)
-    obv_divergence: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    class Meta:
+        db_table = "whale_alerts"
 
-
-class RuntimeSetting(Base):
-    __tablename__ = "runtime_settings"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    value: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    symbol = models.CharField(max_length=16, db_index=True)
+    signal_type = models.CharField(max_length=32)
+    whale_score = models.FloatField()
+    vol_zscore = models.FloatField(default=0)
+    vol_ratio = models.FloatField(default=1)
+    price_change_pct = models.FloatField(default=0)
+    obv_divergence = models.CharField(max_length=16, null=True, blank=True)
+    details = models.TextField(null=True, blank=True)
 
 
-class OpenAIUsageLog(Base):
-    __tablename__ = "openai_usage_log"
+class RuntimeSetting(models.Model):
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    model: Mapped[str] = mapped_column(String(64))
-    symbol: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    class Meta:
+        db_table = "runtime_settings"
+
+    key = models.CharField(max_length=64, unique=True, db_index=True)
+    value = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
 
 
-class LiveOrderLog(Base):
+class OpenAIUsageLog(models.Model):
+
+    class Meta:
+        db_table = "openai_usage_log"
+
+    created_at = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    model = models.CharField(max_length=64)
+    symbol = models.CharField(max_length=16, null=True, blank=True)
+    input_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+    total_tokens = models.IntegerField(default=0)
+    estimated_cost_usd = models.FloatField(default=0.0)
+
+
+class LiveOrderLog(models.Model):
     """Log of every LIVE order attempt (success, error, skip)."""
-    __tablename__ = "live_order_log"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    username: Mapped[str] = mapped_column(String(64))
-    symbol: Mapped[str] = mapped_column(String(32))
-    action: Mapped[str] = mapped_column(String(8))  # BUY / SELL
-    status: Mapped[str] = mapped_column(String(16))  # ok / error / skip / exception
-    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    allocation: Mapped[float | None] = mapped_column(Float, nullable=True)
-    quote_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    commission: Mapped[float | None] = mapped_column(Float, nullable=True)
-    commission_asset: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    class Meta:
+        db_table = "live_order_log"
+
+    created_at = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    username = models.CharField(max_length=64)
+    symbol = models.CharField(max_length=32)
+    action = models.CharField(max_length=8)
+    status = models.CharField(max_length=16)
+    detail = models.TextField(null=True, blank=True)
+    order_id = models.CharField(max_length=64, null=True, blank=True)
+    allocation = models.FloatField(null=True, blank=True)
+    quote_currency = models.CharField(max_length=8, null=True, blank=True)
+    commission = models.FloatField(null=True, blank=True)
+    commission_asset = models.CharField(max_length=16, null=True, blank=True)
 
 
-class AuditLog(Base):
+class AuditLog(models.Model):
     """Security audit trail for sensitive operations."""
-    __tablename__ = "audit_logs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    action: Mapped[str] = mapped_column(String(64), index=True)
-    resource: Mapped[str] = mapped_column(String(64), default="")
-    details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    class Meta:
+        db_table = "audit_logs"
+
+    user_id = models.IntegerField(null=True, blank=True, db_index=True)
+    action = models.CharField(max_length=64, db_index=True)
+    resource = models.CharField(max_length=64, default="")
+    details = models.TextField(null=True, blank=True)
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    timestamp = models.DateTimeField(default=datetime.utcnow, db_index=True)
 
 
-class LeverageSimTrade(Base):
+class LeverageSimTrade(models.Model):
     """Paper-traded leverage (perpetual) position for agent learning."""
-    __tablename__ = "leverage_sim_trades"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(16), index=True)
-    side: Mapped[str] = mapped_column(String(8))                # LONG / SHORT
-    leverage: Mapped[float] = mapped_column(Float, default=2.0)
-    entry_price: Mapped[float] = mapped_column(Float)
-    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    quantity: Mapped[float] = mapped_column(Float)               # notional qty in base asset
-    margin_used: Mapped[float] = mapped_column(Float)            # actual USDT collateral
-    liquidation_price: Mapped[float] = mapped_column(Float)
-    take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
-    stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
-    funding_fees: Mapped[float] = mapped_column(Float, default=0.0)  # accumulated 8h fees
-    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # realized P&L after close
-    pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(String(16), default="OPEN", index=True)  # OPEN / CLOSED / LIQUIDATED
-    close_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)  # tp/sl/signal/liquidation/manual
-    decision_score: Mapped[int] = mapped_column(Integer, default=0)
-    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    class Meta:
+        db_table = "leverage_sim_trades"
+
+    symbol = models.CharField(max_length=16, db_index=True)
+    side = models.CharField(max_length=8)
+    leverage = models.FloatField(default=2.0)
+    entry_price = models.FloatField()
+    exit_price = models.FloatField(null=True, blank=True)
+    quantity = models.FloatField()
+    margin_used = models.FloatField()
+    liquidation_price = models.FloatField()
+    take_profit = models.FloatField(null=True, blank=True)
+    stop_loss = models.FloatField(null=True, blank=True)
+    funding_fees = models.FloatField(default=0.0)
+    pnl = models.FloatField(null=True, blank=True)
+    pnl_pct = models.FloatField(null=True, blank=True)
+    status = models.CharField(max_length=16, default="OPEN", db_index=True)
+    close_reason = models.CharField(max_length=32, null=True, blank=True)
+    decision_score = models.IntegerField(default=0)
+    decision_reason = models.TextField(null=True, blank=True)
+    opened_at = models.DateTimeField(default=datetime.utcnow, db_index=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
 
 
-class FailedLoginAttempt(Base):
+class FailedLoginAttempt(models.Model):
     """Track failed login attempts for account lockout."""
-    __tablename__ = "failed_login_attempts"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    class Meta:
+        db_table = "failed_login_attempts"
+
+    user_id = models.IntegerField(null=True, blank=True, db_index=True)
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    timestamp = models.DateTimeField(default=datetime.utcnow, db_index=True)

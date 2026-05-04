@@ -21,3 +21,14 @@ Thumbs.db
 .idea/
 .vscode/
 *.bak
+
+# Local diagnostic / scratch files (never commit)
+tmp_*.py
+tmp_prod/
+*.prod
+deploy.zip
+test.md
+create_user_tmp.py
+
+deploy.zip
+

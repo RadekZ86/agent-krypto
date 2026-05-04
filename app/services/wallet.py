@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import delete, desc, func, select
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.models import Decision, LearningLog, MarketData, SimulatedTrade
 from app.services.market_data import LiveQuoteService, load_latest_market_row
@@ -16,24 +13,25 @@ class WalletService:
         self.runtime_state = RuntimeStateService()
         self.live_quotes = LiveQuoteService()
 
-    def execute_decision(self, session: Session, decision: Decision, market_price: float) -> dict[str, float | str] | None:
+    def execute_decision(self, decision: Decision, market_price: float) -> dict[str, float | str] | None:
         if decision.decision == "BUY":
-            return self._open_position(session, decision, market_price)
+            return self._open_position(decision, market_price)
         if decision.decision == "SELL":
-            return self._close_position(session, decision, market_price)
+            return self._close_position(decision, market_price)
+        if decision.decision == "PARTIAL_SELL":
+            return self._partial_close_position(decision, market_price)
         return None
 
-    def reset_paper_portfolio(self, session: Session) -> dict[str, int]:
-        deleted_trades = session.execute(delete(SimulatedTrade))
-        deleted_logs = session.execute(delete(LearningLog))
-        session.commit()
+    def reset_paper_portfolio(self) -> dict[str, int]:
+        deleted_trades = SimulatedTrade.objects.all().delete()[0]
+        deleted_logs = LearningLog.objects.all().delete()[0]
         return {
-            "deleted_trades": int(deleted_trades.rowcount or 0),
-            "deleted_learning_logs": int(deleted_logs.rowcount or 0),
+            "deleted_trades": int(deleted_trades or 0),
+            "deleted_learning_logs": int(deleted_logs or 0),
         }
 
-    def get_snapshot(self, session: Session) -> dict[str, object]:
-        trades = session.execute(select(SimulatedTrade).order_by(SimulatedTrade.opened_at.asc())).scalars().all()
+    def get_snapshot(self) -> dict[str, object]:
+        trades = list(SimulatedTrade.objects.order_by('opened_at'))
         open_trades = [trade for trade in trades if trade.status == "OPEN"]
         closed_trades = [trade for trade in trades if trade.status == "CLOSED"]
         winning_trades = [trade for trade in closed_trades if (trade.profit or 0.0) > 0]
@@ -53,7 +51,7 @@ class WalletService:
         open_value = 0.0
         unrealized_profit = 0.0
         for trade in open_trades:
-            current_price = self._latest_price(session, trade.symbol) or trade.buy_price
+            current_price = self._latest_price(trade.symbol) or trade.buy_price
             current_value = trade.quantity * current_price
             total_cost = trade.buy_value + trade.buy_fee
             pnl_value = current_value - total_cost
@@ -115,21 +113,17 @@ class WalletService:
             else None,
         }
 
-    def _open_position(self, session: Session, decision: Decision, market_price: float) -> dict[str, float | str] | None:
-        existing_position = session.execute(
-            select(SimulatedTrade).where(SimulatedTrade.symbol == decision.symbol, SimulatedTrade.status == "OPEN")
-        ).scalar_one_or_none()
+    def _open_position(self, decision: Decision, market_price: float) -> dict[str, float | str] | None:
+        existing_position = SimulatedTrade.objects.filter(symbol=decision.symbol, status="OPEN").first()
         if existing_position is not None:
             return None
 
-        open_positions_count = session.execute(
-            select(func.count(SimulatedTrade.id)).where(SimulatedTrade.status == "OPEN")
-        ).scalar_one()
-        profile = self.runtime_state.get_active_profile(session)
+        open_positions_count = SimulatedTrade.objects.filter(status="OPEN").count()
+        profile = self.runtime_state.get_active_profile()
         if int(open_positions_count) >= int(profile["max_open_positions"]):
             return None
 
-        cash = float(self.get_snapshot(session)["cash_balance"])
+        cash = float(self.get_snapshot()["cash_balance"])
         allocation_scale = float(profile.get("allocation_scale", 1.0))
         target_allocation = settings.allocation_quote.get(decision.symbol, 40.0) * allocation_scale
         gross_value = min(target_allocation, cash * 0.95)
@@ -158,8 +152,7 @@ class WalletService:
             status="OPEN",
             opened_at=datetime.utcnow(),
         )
-        session.add(trade)
-        session.flush()
+        trade.save()
         return {
             "action": "BUY",
             "symbol": decision.symbol,
@@ -168,12 +161,8 @@ class WalletService:
             "cost": round(total_cost, 2),
         }
 
-    def _close_position(self, session: Session, decision: Decision, market_price: float) -> dict[str, float | str] | None:
-        trade = session.execute(
-            select(SimulatedTrade)
-            .where(SimulatedTrade.symbol == decision.symbol, SimulatedTrade.status == "OPEN")
-            .order_by(desc(SimulatedTrade.opened_at))
-        ).scalar_one_or_none()
+    def _close_position(self, decision: Decision, market_price: float) -> dict[str, float | str] | None:
+        trade = SimulatedTrade.objects.filter(symbol=decision.symbol, status="OPEN").order_by('-opened_at').first()
         if trade is None:
             return None
 
@@ -190,6 +179,7 @@ class WalletService:
         trade.duration_minutes = (datetime.utcnow() - trade.opened_at).total_seconds() / 60
         trade.status = "CLOSED"
         trade.closed_at = datetime.utcnow()
+        trade.save()
 
         return {
             "action": "SELL",
@@ -198,9 +188,72 @@ class WalletService:
             "profit": round(trade.profit or 0.0, 2),
         }
 
-    def _latest_price(self, session: Session, symbol: str) -> float | None:
+    def _partial_close_position(self, decision: Decision, market_price: float, fraction: float = 0.5) -> dict[str, float | str] | None:
+        """Zamknij czesc pozycji (domyslnie 50%) i pozostaw reszte OPEN.
+
+        Mechanizm: tworzymy NOWA transakcje CLOSED z czescia quantity (linkowana do tego
+        samego decision_id zeby oznaczyc ze partial juz nastapil) oraz redukujemy quantity
+        i buy_value oryginalnego OPEN trade'a proporcjonalnie. Nie dodajemy nowej kolumny
+        do tabeli - wystarczy ze sibling CLOSED z tym samym decision_id dziala jako flaga.
+        """
+        trade = SimulatedTrade.objects.filter(symbol=decision.symbol, status="OPEN").order_by('-opened_at').first()
+        if trade is None:
+            return None
+        if fraction <= 0 or fraction >= 1:
+            return None
+        # Jezeli juz byl partial dla tego decision_id - nie rob drugiego
+        if trade.decision_id and SimulatedTrade.objects.filter(decision_id=trade.decision_id, status="CLOSED").exists():
+            return None
+
+        executed_price = market_price * (1 - settings.slippage)
+        partial_qty = trade.quantity * fraction
+        remaining_qty = trade.quantity - partial_qty
+
+        partial_buy_value = trade.buy_value * fraction
+        partial_buy_fee = trade.buy_fee * fraction
+
+        gross_proceeds = partial_qty * executed_price
+        sell_fee = gross_proceeds * settings.fee_rate
+        sell_value = gross_proceeds - sell_fee
+        partial_profit = sell_value - (partial_buy_value + partial_buy_fee)
+
+        # Utworz CLOSED trade dla sprzedanej czesci (dziedziczy decision_id - sluzy jako flaga partial)
+        closed_leg = SimulatedTrade(
+            symbol=trade.symbol,
+            decision_id=trade.decision_id,
+            buy_price=trade.buy_price,
+            sell_price=executed_price,
+            quantity=partial_qty,
+            buy_value=partial_buy_value,
+            buy_fee=partial_buy_fee,
+            sell_value=sell_value,
+            sell_fee=sell_fee,
+            profit=partial_profit,
+            duration_minutes=(datetime.utcnow() - trade.opened_at).total_seconds() / 60,
+            status="CLOSED",
+            opened_at=trade.opened_at,
+            closed_at=datetime.utcnow(),
+        )
+        closed_leg.save()
+
+        # Zredukuj oryginalny OPEN trade do pozostalej czesci
+        trade.quantity = remaining_qty
+        trade.buy_value = trade.buy_value - partial_buy_value
+        trade.buy_fee = trade.buy_fee - partial_buy_fee
+        trade.save()
+
+        return {
+            "action": "PARTIAL_SELL",
+            "symbol": decision.symbol,
+            "price": round(executed_price, 2),
+            "quantity_sold": round(partial_qty, 6),
+            "quantity_remaining": round(remaining_qty, 6),
+            "profit": round(partial_profit, 2),
+        }
+
+    def _latest_price(self, symbol: str) -> float | None:
         live_quote = self.live_quotes.get_quote(symbol)
         if live_quote is not None:
             return float(live_quote["price"])
-        row = load_latest_market_row(session, symbol)
+        row = load_latest_market_row(symbol)
         return float(row.close) if row is not None else None

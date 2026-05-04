@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 import pandas as pd
-from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.analysis_frame import build_indicator_frame
@@ -27,7 +26,7 @@ class BacktestService:
         self._cache_created_at: datetime | None = None
         self._computing = False
 
-    def get_rankings(self, session: Session, symbols: list[str] | None = None, force_refresh: bool = False) -> dict[str, Any]:
+    def get_rankings(self, symbols: list[str] | None = None, force_refresh: bool = False) -> dict[str, Any]:
         if not force_refresh and self._cache is not None and self._cache_created_at is not None:
             if datetime.utcnow() - self._cache_created_at < timedelta(minutes=5):
                 return self._cache
@@ -46,15 +45,13 @@ class BacktestService:
     def _compute_in_background(self, symbols: list[str] | None = None) -> None:
         """Run the heavy computation in a background thread."""
         try:
-            from app.database import SessionLocal
-            with SessionLocal() as session:
-                self._compute(session, symbols)
+            self._compute(symbols)
         except Exception:
             pass
         finally:
             self._computing = False
 
-    def _compute(self, session: Session, symbols: list[str] | None = None) -> dict[str, Any]:
+    def _compute(self, symbols: list[str] | None = None) -> dict[str, Any]:
         per_strategy: list[dict[str, Any]] = []
         strategies: list[tuple[str, str, Callable[[pd.Series, dict[str, Any]], bool], Callable[[pd.Series, dict[str, Any], float], bool]]] = [
             (
@@ -87,7 +84,7 @@ class BacktestService:
             per_symbol_capital = aggregate_capital / max(1, len(symbols_to_process))
 
             for symbol in symbols_to_process:
-                metrics = self._backtest_symbol(session, symbol, per_symbol_capital, entry_rule, exit_rule)
+                metrics = self._backtest_symbol(symbol, per_symbol_capital, entry_rule, exit_rule)
                 if metrics is None:
                     continue
                 total_profit += metrics["profit"]
@@ -131,13 +128,12 @@ class BacktestService:
 
     def _backtest_symbol(
         self,
-        session: Session,
         symbol: str,
         initial_capital: float,
         entry_rule: Callable[[pd.Series, dict[str, Any]], bool],
         exit_rule: Callable[[pd.Series, dict[str, Any], float], bool],
     ) -> dict[str, Any] | None:
-        rows = load_symbol_market_rows(session, symbol, limit=min(settings.history_bars, 600))
+        rows = load_symbol_market_rows(symbol, limit=min(settings.history_bars, 600))
         if len(rows) < 80:
             return None
 

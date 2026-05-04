@@ -7,8 +7,6 @@ from statistics import mean
 from typing import Any
 
 import requests
-from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
 
 
 def _is_nan(v: object) -> bool:
@@ -475,12 +473,12 @@ class LearningCenter:
         self._trade_ranking_cache[cache_key] = (_time.time(), result)
         return result
 
-    def build_market_summary(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
+    def build_market_summary(self, symbol: str, limit: int = 60) -> dict[str, Any] | None:
         import time as _time
         cached = self._cache_get(self._market_summary_cache, symbol, self.MARKET_SUMMARY_TTL)
         if cached is not _MISS:
             return cached
-        rows = load_symbol_market_rows(session, symbol, limit=limit)
+        rows = load_symbol_market_rows(symbol, limit=limit)
         if len(rows) < 10:
             self._market_summary_cache[symbol] = (_time.time(), None)
             return None
@@ -491,8 +489,8 @@ class LearningCenter:
         self._market_summary_cache[symbol] = (_time.time(), result)
         return result
 
-    def build_chart_package(self, session: Session, symbol: str, limit: int = 60) -> dict[str, Any] | None:
-        rows = load_symbol_market_rows(session, symbol, limit=limit)
+    def build_chart_package(self, symbol: str, limit: int = 60) -> dict[str, Any] | None:
+        rows = load_symbol_market_rows(symbol, limit=limit)
         if len(rows) < 10:
             return None
 
@@ -500,14 +498,10 @@ class LearningCenter:
         summary, insights = self._analyze_frame(df)
 
         # Fetch recent decisions for buy/sell markers on chart
-        from sqlalchemy import desc as sql_desc
         markers = []
-        recent_decisions = session.execute(
-            select(Decision)
-            .where(Decision.symbol == symbol, Decision.decision.in_(["BUY", "SELL"]))
-            .order_by(sql_desc(Decision.timestamp))
-            .limit(30)
-        ).scalars().all()
+        recent_decisions = list(Decision.objects.filter(
+            symbol=symbol, decision__in=["BUY", "SELL"]
+        ).order_by('-timestamp')[:30])
         for d in recent_decisions:
             markers.append({
                 "time": d.timestamp.strftime("%Y-%m-%d"),
@@ -646,13 +640,12 @@ class LearningCenter:
 
     def build_learning_state(
         self,
-        session: Session,
         market_rows: list[dict[str, Any]],
         chart_packages: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
-        recent_decisions = session.execute(select(Decision).order_by(desc(Decision.timestamp)).limit(40)).scalars().all()
-        recent_trades = session.execute(select(SimulatedTrade).order_by(desc(SimulatedTrade.opened_at)).limit(40)).scalars().all()
-        recent_logs = session.execute(select(LearningLog).order_by(desc(LearningLog.timestamp)).limit(20)).scalars().all()
+        recent_decisions = list(Decision.objects.order_by('-timestamp')[:40])
+        recent_trades = list(SimulatedTrade.objects.order_by('-opened_at')[:40])
+        recent_logs = list(LearningLog.objects.order_by('-timestamp')[:20])
 
         closed_trades = [trade for trade in recent_trades if trade.status == "CLOSED"]
         hold_ratio = (
@@ -814,6 +807,25 @@ class LearningCenter:
                 points = self._fetch_coingecko_lifecycle_history(coin_id)
             except requests.RequestException:
                 points = []
+
+        if not points:
+            # Final fallback: use locally persisted market data so history endpoint
+            # still returns useful points during external API outages/rate limits.
+            history_source = "local_market_data"
+            rows = load_symbol_market_rows(symbol, limit=5000)
+            points = [
+                {
+                    "date": row.timestamp.strftime("%Y-%m-%d"),
+                    "timestamp": row.timestamp.isoformat(),
+                    "open": round(float(row.open), 8),
+                    "high": round(float(row.high), 8),
+                    "low": round(float(row.low), 8),
+                    "close": round(float(row.close), 8),
+                    "volume": round(float(row.volume), 2),
+                    "market_cap": 0.0,
+                }
+                for row in rows
+            ]
 
         points = self._apply_history_floor(symbol, points)
 

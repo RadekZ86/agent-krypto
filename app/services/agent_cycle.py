@@ -3,9 +3,6 @@ from __future__ import annotations
 import logging
 from threading import Lock
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.services.decision_engine import DecisionEngine
 from app.services.indicators import IndicatorService
@@ -33,7 +30,7 @@ def _should_log_skip(username: str, action: str, reason_key: str) -> bool:
     return False
 
 
-def _mirror_to_live_users(session: Session, symbol: str, action: str, market_price: float) -> list[dict]:
+def _mirror_to_live_users(symbol: str, action: str, market_price: float) -> list[dict]:
     """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key.
     Auto-detects available trading pairs and adjusts allocation to user's balance.
     Supports bridge-buy: PLN → USDC → ALT when no direct pair exists."""
@@ -44,13 +41,11 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
     api_key_service = APIKeyService()
     binance_service = BinanceService()
 
-    live_users = session.execute(
-        select(User).where(User.trading_mode == "LIVE", User.is_active == True)
-    ).scalars().all()
+    live_users = list(User.objects.filter(trading_mode="LIVE", is_active=True))
 
     results = []
     for user in live_users:
-        keys = api_key_service.get_user_api_keys(session, user.id)
+        keys = api_key_service.get_user_api_keys(user.id)
         trade_key = next(
             (k for k in keys if k.is_active and not k.is_testnet and k.permissions in ("trade", "trading")),
             None,
@@ -85,12 +80,12 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                     if _should_log_skip(user.username, "BUY", "no_funds"):
                         held_summary = ", ".join(f"{k}={v:.4f}" for k, v in sorted(bal_map.items()) if v > 0.001)
                         logger.info("LIVE %s: brak wystarczajacych srodkow do zakupu (pomin. %s) [%s]", user.username, symbol, held_summary)
-                        session.add(LiveOrderLog(
+                        LiveOrderLog(
                             username=user.username, symbol=symbol, action="BUY", status="skip",
                             detail=f"brak srodkow - ponizej min. zleceń ({held_summary[:200]})",
-                        ))
+                        ).save()
                     continue
-                order_result = _execute_live_buy(client, session, user, symbol, balances)
+                order_result = _execute_live_buy(client, user, symbol, balances)
                 if order_result is not None:
                     results.append(order_result)
             elif action == "SELL":
@@ -123,7 +118,7 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 if sell_qty <= 0:
                     if _should_log_skip(user.username, "SELL", f"dust_{symbol}"):
                         logger.info("LIVE %s: %s ilosc %.8f ponizej minQty dla %s (dust)", user.username, symbol, held, pair)
-                        session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip", detail=f"qty {held:.8f} < minQty (dust)"))
+                        LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip", detail=f"qty {held:.8f} < minQty (dust)").save()
                     continue
 
                 order = client.create_order(
@@ -136,25 +131,25 @@ def _mirror_to_live_users(session: Session, symbol: str, action: str, market_pri
                 if "error" in order:
                     logger.warning("LIVE %s: blad zlecenia SELL %s: %s", user.username, pair, order["error"])
                     results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "error", "detail": order["error"]})
-                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="error", detail=str(order["error"])[:500]))
+                    LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="error", detail=str(order["error"])[:500]).save()
                 else:
                     from app.services.binance_api import extract_commission
                     comm, comm_asset = extract_commission(order)
                     logger.info("LIVE %s: SELL %s OK orderId=%s fee=%.6f %s", user.username, pair, order.get("orderId"), comm, comm_asset)
                     results.append({"user": user.username, "symbol": pair, "action": "SELL", "status": "ok", "order_id": order.get("orderId")})
-                    session.add(LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="ok", order_id=str(order.get("orderId", "")),
-                                             commission=comm, commission_asset=comm_asset))
+                    LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="ok", order_id=str(order.get("orderId", "")),
+                                             commission=comm, commission_asset=comm_asset).save()
                     # Log for learning
                     try:
                         from app.services.learning import LearningService
                         _ls = LearningService()
-                        _ls.log_live_trade_result(session, symbol, "SELL", 0, "LIVE_SELL", f"SELL {symbol} na {pair}")
+                        _ls.log_live_trade_result(symbol=symbol, action="SELL", profit_pct=0, strategy="LIVE_SELL", notes=f"SELL {symbol} na {pair}")
                     except Exception:
                         pass
         except Exception as exc:
             logger.exception("LIVE %s: wyjatek przy %s %s", user.username, action, symbol)
             results.append({"user": user.username, "symbol": symbol, "action": action, "status": "exception", "detail": str(exc)})
-            session.add(LiveOrderLog(username=user.username, symbol=symbol, action=action, status="exception", detail=str(exc)[:500]))
+            LiveOrderLog(username=user.username, symbol=symbol, action=action, status="exception", detail=str(exc)[:500]).save()
 
     return results
 
@@ -255,7 +250,7 @@ def _ensure_spot_balance(client, user, asset: str, needed: float) -> float:
     return spot_free
 
 
-def _execute_live_buy(client, session: Session, user, symbol: str, balances: list[dict]) -> dict | None:
+def _execute_live_buy(client, user, symbol: str, balances: list[dict]) -> dict | None:
     """Execute a LIVE BUY for a symbol.
     Strategy:
       1. Direct buy — find any quote the user has balance in (preferred order).
@@ -267,7 +262,7 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
     alt_quotes = tradeable_pairs.get(symbol, [])
     if not alt_quotes:
         logger.info("LIVE %s: brak dostepnej pary dla %s", user.username, symbol)
-        session.add(LiveOrderLog(username=user.username, symbol=symbol, action="BUY", status="skip", detail="brak pary na gieldzie"))
+        LiveOrderLog(username=user.username, symbol=symbol, action="BUY", status="skip", detail="brak pary na gieldzie").save()
         return {"user": user.username, "symbol": symbol, "action": "BUY", "status": "skip", "detail": "no tradeable pair"}
 
     # Build balance map
@@ -303,7 +298,7 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
         if spot_free < allocation:
             allocation = spot_free  # Use whatever we could redeem
 
-        return _place_buy_order(client, session, user, alt_pair, q, allocation)
+        return _place_buy_order(client, user, alt_pair, q, allocation)
 
     # ---------- 2. BRIDGE BUY: convert held currency → needed quote → ALT ----------
     # For every quote the ALT accepts, check if we can buy that quote with something we hold
@@ -352,10 +347,10 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
             )
             if "error" in step1:
                 logger.warning("LIVE %s: bridge step1 %s error: %s", user.username, convert_pair, step1["error"])
-                session.add(LiveOrderLog(
+                LiveOrderLog(
                     username=user.username, symbol=convert_pair, action="BUY", status="error",
                     detail=f"bridge step1: {str(step1['error'])[:400]}", allocation=src_allocation, quote_currency=source_currency,
-                ))
+                ).save()
                 continue  # Try next source
 
             # Calculate received amount
@@ -365,24 +360,24 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
                     bridge_received += float(fill.get("qty", 0))
             if bridge_received <= 0:
                 logger.warning("LIVE %s: bridge step1 %s: 0 received", user.username, convert_pair)
-                session.add(LiveOrderLog(
+                LiveOrderLog(
                     username=user.username, symbol=convert_pair, action="BUY", status="error",
                     detail="bridge: 0 received", allocation=src_allocation, quote_currency=source_currency,
-                ))
+                ).save()
                 continue
 
             logger.info("LIVE %s: bridge step1 OK: %.6f %s za %.4f %s",
                         user.username, bridge_received, target_quote, src_allocation, source_currency)
-            session.add(LiveOrderLog(
+            LiveOrderLog(
                 username=user.username, symbol=convert_pair, action="BUY", status="ok",
                 detail=f"bridge step1: {bridge_received:.6f} {target_quote}",
                 order_id=str(step1.get("orderId", "")),
                 allocation=src_allocation, quote_currency=source_currency,
-            ))
+            ).save()
 
             # Step 2: Buy ALT with bridge currency
             alt_pair = f"{symbol}{target_quote}"
-            result = _place_buy_order(client, session, user, alt_pair, target_quote, bridge_received)
+            result = _place_buy_order(client, user, alt_pair, target_quote, bridge_received)
             if result and result.get("status") == "ok":
                 result["detail"] = f"bridge {source_currency}->{target_quote}->{symbol}"
             return result
@@ -390,14 +385,14 @@ def _execute_live_buy(client, session: Session, user, symbol: str, balances: lis
     # Nothing worked
     held_summary = ", ".join(f"{k}={v:.4f}" for k, v in sorted(bal_map.items()) if v > 0.001)
     logger.info("LIVE %s: nie mozna kupic %s (brak pary/srodkow) held=[%s]", user.username, symbol, held_summary)
-    session.add(LiveOrderLog(
+    LiveOrderLog(
         username=user.username, symbol=symbol, action="BUY", status="skip",
         detail=f"brak pary lub srodkow ({held_summary[:200]})",
-    ))
+    ).save()
     return {"user": user.username, "symbol": symbol, "action": "BUY", "status": "skip", "detail": "no viable pair"}
 
 
-def _place_buy_order(client, session: Session, user, pair: str, quote_asset: str, allocation: float) -> dict:
+def _place_buy_order(client, user, pair: str, quote_asset: str, allocation: float) -> dict:
     """Place a market buy order and log the result."""
     from app.models import LiveOrderLog
     from app.services.binance_api import extract_commission
@@ -410,19 +405,19 @@ def _place_buy_order(client, session: Session, user, pair: str, quote_asset: str
     )
     if "error" in order:
         logger.warning("LIVE %s: blad zlecenia BUY %s: %s", user.username, pair, order["error"])
-        session.add(LiveOrderLog(
+        LiveOrderLog(
             username=user.username, symbol=pair, action="BUY", status="error",
             detail=str(order["error"])[:500], allocation=allocation, quote_currency=quote_asset,
-        ))
+        ).save()
         return {"user": user.username, "symbol": pair, "action": "BUY", "status": "error", "detail": order["error"]}
     else:
         comm, comm_asset = extract_commission(order)
         logger.info("LIVE %s: BUY %s OK orderId=%s alloc=%.4f %s fee=%.6f %s", user.username, pair, order.get("orderId"), allocation, quote_asset, comm, comm_asset)
-        session.add(LiveOrderLog(
+        LiveOrderLog(
             username=user.username, symbol=pair, action="BUY", status="ok",
             order_id=str(order.get("orderId", "")), allocation=allocation, quote_currency=quote_asset,
             commission=comm, commission_asset=comm_asset,
-        ))
+        ).save()
         return {"user": user.username, "symbol": pair, "action": "BUY", "status": "ok", "order_id": order.get("orderId")}
 
 
@@ -436,7 +431,7 @@ class AgentCycle:
         self.leverage_engine = LeverageEngine()
         self._lock = Lock()
 
-    def run(self, session: Session, symbols: list[str] | None = None) -> dict[str, object]:
+    def run(self, symbols: list[str] | None = None) -> dict[str, object]:
         with self._lock:
             symbols_to_process = symbols or settings.tracked_symbols
 
@@ -454,24 +449,23 @@ class AgentCycle:
             # Fetch backtest rankings for decision engine
             from app.services.backtest import BacktestService
             _backtest_svc = BacktestService()
-            _bt_rankings = _backtest_svc.get_rankings(session)
+            _bt_rankings = _backtest_svc.get_rankings()
 
             for symbol in symbols_to_process:
-                market_snapshot = self.market_data.update_symbol(session, symbol)
-                session.flush()
-                feature_row = self.indicators.compute_for_symbol(session, symbol)
+                market_snapshot = self.market_data.update_symbol(symbol)
+                feature_row = self.indicators.compute_for_symbol(symbol)
                 if feature_row is None:
                     continue
 
-                decision = self.decision_engine.evaluate(session, symbol, feature_row, backtest_rankings=_bt_rankings)
-                execution = self.wallet.execute_decision(session, decision, float(feature_row["close"]))
+                decision = self.decision_engine.evaluate(symbol, feature_row, backtest_rankings=_bt_rankings)
+                execution = self.wallet.execute_decision(decision, float(feature_row["close"]))
 
                 # Log whale alerts if significant
                 whale_signal = feature_row.get("whale_signal", "NONE")
                 whale_score_val = float(feature_row.get("whale_score", 0))
                 if whale_signal != "NONE" and whale_score_val >= 2.0:
                     from app.models import WhaleAlert
-                    session.add(WhaleAlert(
+                    WhaleAlert(
                         symbol=symbol,
                         signal_type=whale_signal,
                         whale_score=whale_score_val,
@@ -480,7 +474,7 @@ class AgentCycle:
                         price_change_pct=float(feature_row.get("price_change_pct", 0)),
                         obv_divergence=feature_row.get("obv_divergence"),
                         details=f"{decision.decision} conf={decision.confidence:.2f} | {decision.reason[:200]}",
-                    ))
+                    ).save()
                     logger.info("🐋 Whale alert %s: %s score=%.1f vol_z=%.1f",
                                 symbol, whale_signal, whale_score_val,
                                 float(feature_row.get("vol_zscore", 0)))
@@ -489,7 +483,7 @@ class AgentCycle:
                 leverage_result = None
                 try:
                     perp_sym = perp_data_map.get(symbol)
-                    leverage_result = self.leverage_engine.evaluate(session, symbol, feature_row, perp_data=perp_sym)
+                    leverage_result = self.leverage_engine.evaluate(symbol, feature_row, perp_data=perp_sym)
                     if leverage_result:
                         logger.info("LEVERAGE %s %s %sx @ $%.2f (score=%d)",
                                     leverage_result["action"], symbol,
@@ -503,7 +497,7 @@ class AgentCycle:
                 if decision.decision in ("BUY", "SELL"):
                     try:
                         live_results = _mirror_to_live_users(
-                            session, symbol, decision.decision, float(feature_row["close"])
+                            symbol, decision.decision, float(feature_row["close"])
                         )
                         if live_results:
                             logger.info("Live mirror for %s %s: %s", symbol, decision.decision, live_results)
@@ -511,15 +505,22 @@ class AgentCycle:
                         logger.exception("Live mirror error for %s", symbol)
 
                 if execution and execution["action"] == "SELL":
-                    trade = session.execute(
-                        select_trade_for_learning(symbol)
-                    ).scalars().first()
+                    trade = select_trade_for_learning(symbol)
                     if trade is not None:
                         self.learning.log_trade_result(
-                            session,
                             trade,
                             market_state=str(feature_row["trend"]),
                             notes=decision.reason,
+                            exit_feature_row=feature_row,
+                        )
+                elif execution and execution["action"] == "PARTIAL_SELL":
+                    # Loguj partial jako zamkniety "leg" (50%) dla uczenia
+                    trade = select_trade_for_learning(symbol)
+                    if trade is not None:
+                        self.learning.log_trade_result(
+                            trade,
+                            market_state=str(feature_row["trend"]),
+                            notes=f"[PARTIAL 50%] {decision.reason}",
                             exit_feature_row=feature_row,
                         )
 
@@ -540,18 +541,12 @@ class AgentCycle:
                     }
                 )
 
-            session.commit()
             return {"symbols": results, "processed": len(results)}
 
 
 def select_trade_for_learning(symbol: str):
-    from sqlalchemy import desc, select
-
     from app.models import SimulatedTrade
 
-    return (
-        select(SimulatedTrade)
-        .where(SimulatedTrade.symbol == symbol, SimulatedTrade.status == "CLOSED")
-        .order_by(desc(SimulatedTrade.closed_at))
-        .limit(1)
-    )
+    return SimulatedTrade.objects.filter(
+        symbol=symbol, status="CLOSED"
+    ).order_by('-closed_at').first()

@@ -8,8 +8,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from django.db.models import Q
 
 from app.models import AuditLog, FailedLoginAttempt, User, UserSession, UserAPIKey
 
@@ -42,7 +41,6 @@ class AuthService:
 
     def register(
         self,
-        session: Session,
         email: str,
         username: str,
         password: str,
@@ -55,16 +53,12 @@ class AuthService:
             return False, pw_msg, None
 
         # Check if email exists
-        existing = session.execute(
-            select(User).where(User.email == email.lower())
-        ).scalar_one_or_none()
+        existing = User.objects.filter(email=email.lower()).first()
         if existing:
             return False, "Email już zarejestrowany", None
 
         # Check if username exists
-        existing = session.execute(
-            select(User).where(User.username == username.lower())
-        ).scalar_one_or_none()
+        existing = User.objects.filter(username=username.lower()).first()
         if existing:
             return False, "Nazwa użytkownika zajęta", None
 
@@ -74,17 +68,14 @@ class AuthService:
             username=username.lower(),
         )
         user.set_password(password)
-        session.add(user)
-        session.flush()
+        user.save()
 
-        session.add(AuditLog(user_id=user.id, action="register", resource="user", ip_address=_client_ip(ip_address)))
-        session.commit()
+        AuditLog(user_id=user.id, action="register", resource="user", ip_address=_client_ip(ip_address)).save()
 
         return True, "Konto utworzone", user
 
     def login(
         self,
-        session: Session,
         email_or_username: str,
         password: str,
         ip_address: Optional[str] = None,
@@ -94,12 +85,10 @@ class AuthService:
         ip = _client_ip(ip_address)
 
         # Find user
-        user = session.execute(
-            select(User).where(
-                (User.email == email_or_username.lower()) |
-                (User.username == email_or_username.lower())
-            )
-        ).scalar_one_or_none()
+        user = User.objects.filter(
+            Q(email=email_or_username.lower()) |
+            Q(username=email_or_username.lower())
+        ).first()
 
         if not user:
             return False, "Nieprawidłowy email/login lub hasło", None
@@ -109,27 +98,24 @@ class AuthService:
 
         # Check lockout
         cutoff = datetime.utcnow() - timedelta(minutes=LOCKOUT_MINUTES)
-        recent_failures = session.execute(
-            select(func.count(FailedLoginAttempt.id)).where(
-                FailedLoginAttempt.user_id == user.id,
-                FailedLoginAttempt.timestamp > cutoff,
-            )
-        ).scalar() or 0
+        recent_failures = FailedLoginAttempt.objects.filter(
+            user_id=user.id,
+            timestamp__gt=cutoff,
+        ).count()
         if recent_failures >= MAX_FAILED_LOGINS:
             logger.warning("Account locked out: user_id=%s ip=%s", user.id, ip)
             return False, f"Zbyt wiele prób logowania. Spróbuj za {LOCKOUT_MINUTES} min.", None
 
         if not user.check_password(password):
-            session.add(FailedLoginAttempt(user_id=user.id, ip_address=ip))
-            session.commit()
+            FailedLoginAttempt(user_id=user.id, ip_address=ip).save()
             return False, "Nieprawidłowy email/login lub hasło", None
 
         # Successful login – clear failed attempts
-        from sqlalchemy import delete as sa_delete
-        session.execute(sa_delete(FailedLoginAttempt).where(FailedLoginAttempt.user_id == user.id))
+        FailedLoginAttempt.objects.filter(user_id=user.id).delete()
 
         # Update last login
         user.last_login = datetime.utcnow()
+        user.save()
 
         # Create session token
         token = secrets.token_urlsafe(48)
@@ -140,63 +126,43 @@ class AuthService:
             ip_address=ip,
             user_agent=user_agent[:256] if user_agent else None
         )
-        session.add(user_session)
-        session.add(AuditLog(user_id=user.id, action="login", resource="session", ip_address=ip))
-        session.commit()
+        user_session.save()
+        AuditLog(user_id=user.id, action="login", resource="session", ip_address=ip).save()
 
         return True, "Zalogowano", token
     
-    def validate_token(self, session: Session, token: str) -> Optional[User]:
+    def validate_token(self, token: str) -> Optional[User]:
         """Validate session token and return user."""
         if not token:
             return None
         
-        user_session = session.execute(
-            select(UserSession).where(
-                UserSession.token == token,
-                UserSession.expires_at > datetime.utcnow()
-            )
-        ).scalar_one_or_none()
+        user_session = UserSession.objects.filter(
+            token=token,
+            expires_at__gt=datetime.utcnow()
+        ).first()
         
         if not user_session:
             return None
         
         return user_session.user
     
-    def logout(self, session: Session, token: str) -> bool:
+    def logout(self, token: str) -> bool:
         """Invalidate session token."""
-        user_session = session.execute(
-            select(UserSession).where(UserSession.token == token)
-        ).scalar_one_or_none()
+        user_session = UserSession.objects.filter(token=token).first()
         
         if user_session:
-            session.delete(user_session)
-            session.commit()
+            user_session.delete()
             return True
         return False
     
-    def logout_all(self, session: Session, user_id: int) -> int:
+    def logout_all(self, user_id: int) -> int:
         """Logout from all sessions."""
-        sessions = session.execute(
-            select(UserSession).where(UserSession.user_id == user_id)
-        ).scalars().all()
-        
-        count = len(sessions)
-        for s in sessions:
-            session.delete(s)
-        session.commit()
+        count, _ = UserSession.objects.filter(user_id=user_id).delete()
         return count
     
-    def cleanup_expired_sessions(self, session: Session) -> int:
+    def cleanup_expired_sessions(self) -> int:
         """Remove expired sessions."""
-        expired = session.execute(
-            select(UserSession).where(UserSession.expires_at < datetime.utcnow())
-        ).scalars().all()
-        
-        count = len(expired)
-        for s in expired:
-            session.delete(s)
-        session.commit()
+        count, _ = UserSession.objects.filter(expires_at__lt=datetime.utcnow()).delete()
         return count
 
 
@@ -236,23 +202,22 @@ class APIKeyService:
         except Exception:
             return ""
 
-    def re_encrypt_from_xor(self, session: Session) -> int:
+    def re_encrypt_from_xor(self) -> int:
         """Migrate all XOR-encrypted secrets to Fernet. Returns count."""
-        all_keys = session.execute(select(UserAPIKey)).scalars().all()
+        all_keys = list(UserAPIKey.objects.all())
         migrated = 0
         for k in all_keys:
             plain = self._decrypt_xor_legacy(k.api_secret_encrypted)
             if plain:
                 k.api_secret_encrypted = self._encrypt(plain)
+                k.save()
                 migrated += 1
         if migrated:
-            session.commit()
             logger.info("Migrated %d API keys from XOR to Fernet", migrated)
         return migrated
     
     def add_api_key(
         self,
-        session: Session,
         user_id: int,
         label: str,
         api_key: str,
@@ -264,12 +229,10 @@ class APIKeyService:
     ) -> tuple[bool, str, Optional[UserAPIKey]]:
         """Add API key for user."""
         # Check if key already exists
-        existing = session.execute(
-            select(UserAPIKey).where(
-                UserAPIKey.user_id == user_id,
-                UserAPIKey.api_key == api_key
-            )
-        ).scalar_one_or_none()
+        existing = UserAPIKey.objects.filter(
+            user_id=user_id,
+            api_key=api_key
+        ).first()
         
         if existing:
             return False, "Ten klucz API już istnieje", None
@@ -286,57 +249,49 @@ class APIKeyService:
             is_testnet=is_testnet,
             permissions=permissions
         )
-        session.add(api_key_obj)
-        session.add(AuditLog(
+        api_key_obj.save()
+        AuditLog(
             user_id=user_id,
             action="api_key_added",
             resource=f"{exchange}:{api_key[:8]}...",
             details=f"testnet={is_testnet} perms={permissions}",
             ip_address=_client_ip(ip_address),
-        ))
-        session.commit()
+        ).save()
         
         return True, "Klucz API dodany", api_key_obj
     
-    def get_user_api_keys(self, session: Session, user_id: int) -> list[UserAPIKey]:
+    def get_user_api_keys(self, user_id: int) -> list[UserAPIKey]:
         """Get all API keys for user."""
-        return session.execute(
-            select(UserAPIKey).where(
-                UserAPIKey.user_id == user_id,
-                UserAPIKey.is_active == True
-            )
-        ).scalars().all()
+        return list(UserAPIKey.objects.filter(
+            user_id=user_id,
+            is_active=True
+        ))
     
     def get_decrypted_secret(self, api_key: UserAPIKey) -> str:
         """Get decrypted API secret."""
         return self._decrypt(api_key.api_secret_encrypted)
     
-    def delete_api_key(self, session: Session, user_id: int, key_id: int) -> bool:
+    def delete_api_key(self, user_id: int, key_id: int) -> bool:
         """Delete API key."""
-        api_key = session.execute(
-            select(UserAPIKey).where(
-                UserAPIKey.id == key_id,
-                UserAPIKey.user_id == user_id
-            )
-        ).scalar_one_or_none()
+        api_key = UserAPIKey.objects.filter(
+            id=key_id,
+            user_id=user_id
+        ).first()
         
         if api_key:
-            session.delete(api_key)
-            session.commit()
+            api_key.delete()
             return True
         return False
     
-    def toggle_api_key(self, session: Session, user_id: int, key_id: int) -> bool:
+    def toggle_api_key(self, user_id: int, key_id: int) -> bool:
         """Toggle API key active status."""
-        api_key = session.execute(
-            select(UserAPIKey).where(
-                UserAPIKey.id == key_id,
-                UserAPIKey.user_id == user_id
-            )
-        ).scalar_one_or_none()
+        api_key = UserAPIKey.objects.filter(
+            id=key_id,
+            user_id=user_id
+        ).first()
         
         if api_key:
             api_key.is_active = not api_key.is_active
-            session.commit()
+            api_key.save()
             return True
         return False

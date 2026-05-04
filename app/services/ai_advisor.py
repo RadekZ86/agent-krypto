@@ -5,8 +5,6 @@ import logging
 import re
 from typing import Any
 
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.models import OpenAIUsageLog
 
@@ -38,7 +36,7 @@ def parse_user_command(message: str) -> dict | None:
 
 
 class AIAdvisor:
-    def generate_market_brief(self, session: Session, dashboard: dict[str, Any], symbol: str | None = None) -> dict[str, str | bool | int | float]:
+    def generate_market_brief(self, dashboard: dict[str, Any], symbol: str | None = None) -> dict[str, str | bool | int | float]:
         if not settings.openai_api_key:
             return {
                 "enabled": False,
@@ -150,17 +148,15 @@ class AIAdvisor:
         total_tokens = int(getattr(usage, "total_tokens", input_tokens + output_tokens) or (input_tokens + output_tokens))
         estimated_cost = ((input_tokens / 1_000_000) * settings.openai_input_cost_per_million) + ((output_tokens / 1_000_000) * settings.openai_output_cost_per_million)
 
-        session.add(
-            OpenAIUsageLog(
-                model=settings.openai_model,
-                symbol=selected_symbol,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                estimated_cost_usd=estimated_cost,
-            )
-        )
-        session.commit()
+        OpenAIUsageLog(
+            model=settings.openai_model,
+            symbol=selected_symbol,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost,
+        ).save()
+
         return {
             "enabled": True,
             "message": message,
@@ -173,7 +169,6 @@ class AIAdvisor:
 
     def chat(
         self,
-        session: Session,
         user_message: str,
         dashboard: dict[str, Any],
         conversation_history: list[dict[str, str]] | None = None,
@@ -272,9 +267,9 @@ class AIAdvisor:
         if admin_mode:
             # Pre-fetch current state for the AI context
             from app.services.self_modify import execute_command as _exec_cmd
-            _current_state = _exec_cmd(session, {"tool": "get_params"}, current_user)
-            _learn_state = _exec_cmd(session, {"tool": "get_learning_stats"}, current_user)
-            _adaptive = _exec_cmd(session, {"tool": "get_adaptive_state"}, current_user)
+            _current_state = _exec_cmd({"tool": "get_params"}, current_user)
+            _learn_state = _exec_cmd({"tool": "get_learning_stats"}, current_user)
+            _adaptive = _exec_cmd({"tool": "get_adaptive_state"}, current_user)
 
             system_prompt += (
                 "\n\n=== TRYB ADMINISTRATORA (SELF-MODIFY) ===\n"
@@ -324,17 +319,14 @@ class AIAdvisor:
         total_tokens = input_tokens + output_tokens
         estimated_cost = ((input_tokens / 1_000_000) * settings.openai_input_cost_per_million) + ((output_tokens / 1_000_000) * settings.openai_output_cost_per_million)
 
-        session.add(
-            OpenAIUsageLog(
-                model=settings.openai_model,
-                symbol=command["symbol"] if command else "chat",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-                estimated_cost_usd=estimated_cost,
-            )
-        )
-        session.commit()
+        OpenAIUsageLog(
+            model=settings.openai_model,
+            symbol=command["symbol"] if command else "chat",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost,
+        ).save()
 
         # Extract embedded command from AI response
         detected_cmd = None
@@ -356,7 +348,7 @@ class AIAdvisor:
             for match_str in selfmod_matches:
                 try:
                     selfmod_cmd = json.loads(match_str)
-                    result = _exec_selfmod(session, selfmod_cmd, current_user)
+                    result = _exec_selfmod(selfmod_cmd, current_user)
                     selfmod_results.append(result)
                     logger.info("SELFMOD executed: %s -> %s", selfmod_cmd.get("tool"), result.get("ok"))
                 except (json.JSONDecodeError, Exception) as exc:
