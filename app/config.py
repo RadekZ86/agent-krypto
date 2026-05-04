@@ -18,8 +18,10 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# NOTE: usuniete na podstawie analizy 188 zamknietych transakcji (zajcu1986@wp.pl):
+# BTC (-11.12 PLN, 22 trans, WR 18%), APT (-6.06 PLN), INJ (-5.16 PLN),
+# PEPE (-4.99 PLN), ARB (-4.84 PLN). Razem 32 PLN strat (~41% calkowitej straty).
 DEFAULT_SYMBOLS = [
-    "BTC",
     "ETH",
     "BNB",
     "SOL",
@@ -37,20 +39,16 @@ DEFAULT_SYMBOLS = [
     "ATOM",
     "UNI",
     "NEAR",
-    "APT",
     "ETC",
     "XLM",
     "HBAR",
     "FIL",
-    "ARB",
     "AAVE",
     "OP",
-    "INJ",
     "ICP",
     "VET",
     "ALGO",
     "SHIB",
-    "PEPE",
     "SEI",
     "FET",
     "RENDER",

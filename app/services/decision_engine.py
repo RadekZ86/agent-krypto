@@ -11,10 +11,72 @@ from app.services.symbol_learning import get_symbol_threshold_adjustment
 
 
 class DecisionEngine:
+    # Class-level cache shared across instances (refreshed every 10 min)
+    _quality_cache: dict | None = None
+    _quality_cache_at: datetime | None = None
+
     def __init__(self) -> None:
         self.runtime_state = RuntimeStateService()
         self.risk_manager = RiskManager()
         self._risk_snapshot: dict | None = None
+
+    @classmethod
+    def _refresh_quality_cache(cls) -> dict:
+        """Refresh blacklists from DB. Cached 10 min.
+
+        Returns dict with:
+          - bad_symbols: set of symbols with WR<25% AND >=8 closed trades
+          - bad_signals: set of signal names with WR<25% AND >=10 fires
+          - bad_hours_utc: hardcoded set based on historical analysis
+        """
+        now = datetime.utcnow()
+        if (
+            cls._quality_cache is not None
+            and cls._quality_cache_at is not None
+            and (now - cls._quality_cache_at).total_seconds() < 600
+        ):
+            return cls._quality_cache
+
+        bad_symbols: set[str] = set()
+        bad_signals: set[str] = set()
+        try:
+            from app.models import LearningLog, SignalPerformance
+            # Per-symbol stats from learning log (only closed trades)
+            sym_stats: dict[str, list[int]] = {}
+            for row in LearningLog.objects.exclude(symbol__isnull=True).only("symbol", "was_profitable"):
+                if not row.symbol:
+                    continue
+                s = sym_stats.setdefault(row.symbol, [0, 0])
+                s[0] += 1
+                if row.was_profitable:
+                    s[1] += 1
+            for sym, (total, wins) in sym_stats.items():
+                if total >= 8 and (wins / total) < 0.25:
+                    bad_symbols.add(sym)
+            # Per-signal stats
+            for sp in SignalPerformance.objects.all().only("signal_name", "total_fired", "wins"):
+                if sp.total_fired >= 10 and (sp.wins / sp.total_fired) < 0.25:
+                    bad_signals.add(sp.signal_name)
+        except Exception:
+            pass
+
+        cls._quality_cache = {
+            "bad_symbols": bad_symbols,
+            "bad_signals": bad_signals,
+            "bad_hours_utc": {4, 8, 9, 11, 15},  # historycznie ujemne (analiza 188 trans.)
+        }
+        cls._quality_cache_at = now
+        return cls._quality_cache
+
+    def _is_symbol_blacklisted(self, symbol: str) -> bool:
+        return symbol in self._refresh_quality_cache()["bad_symbols"]
+
+    def _count_low_quality_signals(self, signals: list[str]) -> int:
+        bad = self._refresh_quality_cache()["bad_signals"]
+        return sum(1 for s in signals if s in bad)
+
+    def _is_bad_hour(self) -> int:
+        return datetime.utcnow().hour in self._refresh_quality_cache()["bad_hours_utc"]
 
     def evaluate(self, symbol: str, feature_row: dict[str, float | str], backtest_rankings: dict | None = None) -> Decision:
         profile = self.runtime_state.get_active_profile()
@@ -378,6 +440,20 @@ class DecisionEngine:
                 buy_threshold += sym_delta
                 if sym_reason:
                     buy_signals.append(sym_reason)
+
+            # ── QUALITY FILTERS: blacklist + hour + signal-quality ──
+            # (na podstawie analizy 188 zamknietych trans.: WR=23%, profit_factor=0.22)
+            if self._is_symbol_blacklisted(symbol):
+                buy_threshold += 2
+                buy_signals.append(f"UWAGA: {symbol} z ujemna historia (WR<25%, +2 do progu)")
+            if self._is_bad_hour():
+                buy_threshold += 1
+                _h = datetime.utcnow().hour
+                buy_signals.append(f"UWAGA: zla godzina UTC {_h:02d} (historycznie ujemna, +1 do progu)")
+            _low_q = self._count_low_quality_signals(buy_signals)
+            if _low_q > 0:
+                buy_score -= _low_q
+                buy_signals.append(f"UWAGA: {_low_q} sygnalow z WR<25% (kara -{_low_q})")
 
             # Require minimum 4 different confirming (non-penalty) signals
             positive_signals = [s for s in buy_signals if "kara" not in s.lower() and "uwaga" not in s.lower()]
