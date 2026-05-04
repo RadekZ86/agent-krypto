@@ -223,6 +223,40 @@ class BinanceClient:
             params["amount"] = self._format_quantity(amount)
         return self._request("POST", "/sapi/v1/simple-earn/flexible/redeem", params, signed=True)
 
+    # ==================== DUST → BNB ====================
+
+    def get_dust_assets(self) -> dict:
+        """Pobierz liste 'pylkow' (drobnych saldz) ktore mozna zamienic na BNB.
+        Zwraca dict z polami: details (lista), totalTransferBtc, totalTransferBnb."""
+        return self._request("POST", "/sapi/v1/asset/dust-btc", signed=True)
+
+    def convert_dust_to_bnb(self, assets: list[str]) -> dict:
+        """Zamien wskazane male salda (dust) na BNB.
+        Limit: jedno wywolanie / 6 sekund. Min wartosc per asset ustalana przez Binance.
+        Args:
+            assets: lista assetow do konwersji, np. ['SHIB','PEPE']. Max ok. 100 per call.
+        Zwraca podsumowanie konwersji od Binance lub {'error': ...}."""
+        if not assets:
+            return {"error": "empty asset list"}
+        # Binance oczekuje powtorzonego paramu asset=A&asset=B (nie listy CSV).
+        # urlencode w _request nie wspiera doseq automatycznie, wiec budujemy params
+        # jako lista krotek i przekazujemy przez specjalny path.
+        params = [("asset", a) for a in assets]
+        params.append(("timestamp", int(time.time() * 1000)))
+        query = urlencode(params)
+        signature = hmac.new(
+            self.api_secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        url = f"{self.base_url}/sapi/v1/asset/dust?{query}&signature={signature}"
+        headers = {"X-MBX-APIKEY": self.api_key}
+        try:
+            response = requests.post(url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                return {"error": response.text, "code": response.status_code}
+            return response.json()
+        except requests.RequestException as e:
+            return {"error": str(e)}
+
     def get_open_orders(self, symbol: Optional[str] = None) -> list:
         """Get all open orders."""
         params = {}

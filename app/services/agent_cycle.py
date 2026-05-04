@@ -30,6 +30,108 @@ def _should_log_skip(username: str, action: str, reason_key: str) -> bool:
     return False
 
 
+# ── Dust → BNB convert: skipowane assety (kwotowe i strategiczne) ──
+_DUST_SKIP_ASSETS = {"BNB", "USDT", "USDC", "BUSD", "FDUSD", "PLN", "EUR", "TRY", "BTC", "ETH"}
+# Min godzin miedzy konwersjami dla jednego usera (Binance limit: 1× / 6h faktycznie, my dajemy 24h)
+_DUST_MIN_INTERVAL_HOURS = 24
+
+
+def _convert_dust_for_live_users() -> None:
+    """Raz na ~24h sprawdza salda LIVE userow i konwertuje 'pylki' (drobne salda
+    ponizej progu Binance dla zlecen) na BNB. Pomijamy assety z aktywnych pozycji
+    i kwotowe (USDT/USDC/PLN/BTC/ETH).
+
+    Trigger: na koncu kazdego cyklu agenta. Throttle przez LiveOrderLog.action='DUST_CONVERT'."""
+    from datetime import datetime, timedelta
+    from app.models import User, UserAPIKey, LiveOrderLog, SimulatedTrade
+    from app.services.auth import APIKeyService
+    from app.services.binance_api import BinanceService
+
+    cutoff = datetime.utcnow() - timedelta(hours=_DUST_MIN_INTERVAL_HOURS)
+    api_key_service = APIKeyService()
+    binance_service = BinanceService()
+
+    # Symbole z otwartymi paper-pozycjami — chronimy je przed konwersja
+    open_symbols = set(
+        SimulatedTrade.objects.filter(closed_at__isnull=True)
+        .values_list("symbol", flat=True)
+        .distinct()
+    )
+
+    live_users = list(User.objects.filter(trading_mode="LIVE", is_active=True))
+    for user in live_users:
+        # Czy juz konwertowal w ostatnich 24h?
+        recent = LiveOrderLog.objects.filter(
+            username=user.username,
+            action="DUST_CONVERT",
+            created_at__gte=cutoff,
+        ).exists()
+        if recent:
+            continue
+
+        keys = api_key_service.get_user_api_keys(user.id)
+        trade_key = next(
+            (k for k in keys if k.is_active and not k.is_testnet and k.permissions in ("trade", "trading")),
+            None,
+        )
+        if trade_key is None:
+            continue
+        api_secret = api_key_service.get_decrypted_secret(trade_key)
+        if not api_secret:
+            continue
+        client = binance_service.get_client(
+            api_key=trade_key.api_key, api_secret=api_secret, testnet=trade_key.is_testnet,
+        )
+
+        try:
+            dust_resp = client.get_dust_assets()
+            if not isinstance(dust_resp, dict) or "error" in dust_resp:
+                # Cicho — endpoint moze byc nieobecny / brak permisji. Loguj raz na 30min.
+                if _should_log_skip(user.username, "DUST_CONVERT", "fetch_failed"):
+                    logger.info("LIVE %s: dust-btc lookup nieudany: %s", user.username,
+                                (dust_resp or {}).get("error", "no response"))
+                continue
+
+            details = dust_resp.get("details", []) or []
+            # Filtr: pomin BNB/quote/strategiczne i otwarte pozycje
+            assets_to_convert: list[str] = []
+            for d in details:
+                asset = str(d.get("asset", "")).upper()
+                if not asset or asset in _DUST_SKIP_ASSETS or asset in open_symbols:
+                    continue
+                assets_to_convert.append(asset)
+
+            if not assets_to_convert:
+                # Zaloguj heartbeat raz dziennie (skip-log throttle 30min nie pasuje, uzyj LiveOrderLog 24h cutoff)
+                LiveOrderLog(
+                    username=user.username, symbol="-", action="DUST_CONVERT", status="noop",
+                    detail="brak kwalifikujacych sie pylkow",
+                ).save()
+                continue
+
+            # Limit do ~50 assetow na call (Binance toleruje wiecej, ale bezpiecznie)
+            chunk = assets_to_convert[:50]
+            result = client.convert_dust_to_bnb(chunk)
+            if isinstance(result, dict) and "error" in result:
+                LiveOrderLog(
+                    username=user.username, symbol="-", action="DUST_CONVERT", status="error",
+                    detail=f"{result.get('error','')[:200]} | assets={','.join(chunk)[:200]}",
+                ).save()
+                logger.warning("LIVE %s: dust convert error: %s", user.username, result.get("error"))
+                continue
+
+            total_bnb = float(result.get("totalTransferedAmount", 0)) if isinstance(result, dict) else 0.0
+            total_fee = float(result.get("totalServiceCharge", 0)) if isinstance(result, dict) else 0.0
+            LiveOrderLog(
+                username=user.username, symbol="-", action="DUST_CONVERT", status="ok",
+                detail=f"+{total_bnb:.6f} BNB (fee {total_fee:.6f}) z {len(chunk)} assetow: {','.join(chunk)[:300]}",
+                commission=total_fee, commission_asset="BNB",
+            ).save()
+            logger.info("LIVE %s: dust→BNB OK: +%.6f BNB z %d assetow", user.username, total_bnb, len(chunk))
+        except Exception:
+            logger.exception("LIVE %s: dust convert exception", user.username)
+
+
 def _mirror_to_live_users(symbol: str, action: str, market_price: float) -> list[dict]:
     """Mirror a paper trade decision to all users with trading_mode=LIVE and a valid Binance key.
     Auto-detects available trading pairs and adjusts allocation to user's balance.
@@ -540,6 +642,12 @@ class AgentCycle:
                         "leverage_action": leverage_result,
                     }
                 )
+
+            # Po kazdym cyklu: probuj zamienic dust→BNB (throttle 24h per user wewnatrz)
+            try:
+                _convert_dust_for_live_users()
+            except Exception:
+                logger.exception("dust→BNB cycle hook failed")
 
             return {"symbols": results, "processed": len(results)}
 
