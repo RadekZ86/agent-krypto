@@ -291,6 +291,10 @@ _MIN_ORDER = {
 # Cache for symbol filters: pair -> (min_qty, step_size, min_notional)
 _lot_size_cache: dict[str, tuple[float, float, float]] = {}
 
+# Per-user-asset cooldown timestamps (UNIX seconds) for Earn redeem failures.
+# Prevents repeated -6006 / -6009 errors hammering the API every cycle.
+_EARN_REDEEM_COOLDOWN: dict[str, float] = {}
+
 
 def _get_symbol_filters(client, pair: str) -> tuple[float, float, float]:
     """Return (min_qty, step_size, min_notional) for a pair, cached."""
@@ -380,6 +384,12 @@ def _ensure_spot_balance(client, user, asset: str, needed: float) -> float:
     if spot_free >= needed:
         return spot_free
 
+    # Cooldown: do not retry Earn redeem for assets that recently failed (e.g. -6006 below min).
+    key = f"{user.username}:{asset}"
+    cooldown_until = _EARN_REDEEM_COOLDOWN.get(key, 0)
+    if cooldown_until > _time.time():
+        return spot_free
+
     # Spot balance too low — check if asset is in Earn (flexible savings)
     earn_pos = client.get_earn_flexible_position(asset)
     if not earn_pos:
@@ -405,8 +415,13 @@ def _ensure_spot_balance(client, user, asset: str, needed: float) -> float:
         _time.sleep(2)  # Wait for settlement
         spot_free = client.get_spot_free(asset)
     else:
-        logger.warning("LIVE %s: Earn redeem %s failed: %s", user.username, asset,
-                        redeem_result.get("error", "unknown") if isinstance(redeem_result, dict) else redeem_result)
+        err = redeem_result.get("error", "unknown") if isinstance(redeem_result, dict) else str(redeem_result)
+        # -6006 = amount below minimum, -6009 = frequency exceeded — both deserve a long cooldown
+        # so we don't hammer the API every cycle.
+        cooldown_h = 24 if ("-6006" in err or "-6009" in err) else 1
+        _EARN_REDEEM_COOLDOWN[key] = _time.time() + cooldown_h * 3600
+        logger.warning("LIVE %s: Earn redeem %s failed (cooldown %dh): %s",
+                       user.username, asset, cooldown_h, err)
 
     return spot_free
 

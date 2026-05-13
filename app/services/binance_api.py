@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -13,6 +14,30 @@ import requests
 from app.models import UserAPIKey
 
 import re
+
+logger = logging.getLogger(__name__)
+
+# Global IP-ban cooldown: when Binance returns -1003 we stop sending requests
+# until this UNIX timestamp (ms) to avoid extending the ban.
+_BAN_UNTIL_MS: int = 0
+
+
+def _is_banned_now() -> tuple[bool, int]:
+    """Return (banned, remaining_seconds)."""
+    now_ms = int(time.time() * 1000)
+    if _BAN_UNTIL_MS > now_ms:
+        return True, (_BAN_UNTIL_MS - now_ms) // 1000
+    return False, 0
+
+
+def _set_ban(until_ms: int) -> None:
+    global _BAN_UNTIL_MS
+    if until_ms > _BAN_UNTIL_MS:
+        _BAN_UNTIL_MS = until_ms
+        logger.warning("Binance IP banned by rate-limiter until %s (%.0fs)",
+                       datetime.fromtimestamp(until_ms / 1000).isoformat(),
+                       (until_ms - int(time.time() * 1000)) / 1000)
+
 
 # Earn wrapper tokens: strip LD prefix and trailing digits (LDSHIB2 → SHIB, LDBTC → BTC)
 _EARN_ASSET_RE = re.compile(r'^LD([A-Z]{2,}?)\d*$')
@@ -73,6 +98,11 @@ class BinanceClient:
         signed: bool = False
     ) -> dict:
         """Make API request."""
+        # Honour active IP ban — don't hit Binance while -1003 cooldown is in effect.
+        banned, remain = _is_banned_now()
+        if banned:
+            return {"error": f"binance_ip_ban_active ({remain}s remaining)", "code": -1003, "cooldown": True}
+
         url = f"{self.base_url}{endpoint}"
         headers = {"X-MBX-APIKEY": self.api_key}
         
@@ -94,7 +124,23 @@ class BinanceClient:
                 return {"error": f"Unknown method: {method}"}
             
             if response.status_code != 200:
-                return {"error": response.text, "code": response.status_code}
+                # HTTP 418 = banned. HTTP 429 = warning. -1003 in body = ban-until-timestamp.
+                text = response.text or ""
+                # Try to extract "banned until <ms>" from message
+                m = re.search(r'banned until (\d{10,})', text)
+                if m:
+                    _set_ban(int(m.group(1)))
+                elif response.status_code in (418, 429):
+                    # Conservative cooldown when server says 'too much' but no timestamp.
+                    retry_after = response.headers.get("Retry-After")
+                    cooldown_s = 60
+                    try:
+                        if retry_after:
+                            cooldown_s = max(cooldown_s, int(float(retry_after)))
+                    except Exception:
+                        pass
+                    _set_ban(int(time.time() * 1000) + cooldown_s * 1000)
+                return {"error": text, "code": response.status_code}
             
             return response.json()
         except requests.RequestException as e:
