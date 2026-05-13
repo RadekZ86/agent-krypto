@@ -234,6 +234,18 @@ def _mirror_to_live_users(symbol: str, action: str, market_price: float) -> list
                         LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip", detail=f"qty {held:.8f} < minQty (dust)").save()
                     continue
 
+                # Pre-check NOTIONAL filter: qty * price must be >= minNotional, else Binance rejects with -1013.
+                _, _, _min_notional = _get_symbol_filters(client, pair)
+                if _min_notional > 0:
+                    _price = _get_pair_price(client, pair)
+                    if _price > 0 and sell_qty * _price < _min_notional:
+                        if _should_log_skip(user.username, "SELL", f"notional_{symbol}"):
+                            logger.info("LIVE %s: %s notional %.4f < minNotional %.4f dla %s (dust)",
+                                        user.username, symbol, sell_qty * _price, _min_notional, pair)
+                            LiveOrderLog(username=user.username, symbol=pair, action="SELL", status="skip",
+                                         detail=f"notional {sell_qty * _price:.4f} < minNotional {_min_notional:.4f} (dust)").save()
+                        continue
+
                 order = client.create_order(
                     symbol=pair,
                     side="SELL",
@@ -276,29 +288,54 @@ _MIN_ORDER = {
     "ETH": 0.003, "BNB": 0.05, "BRL": 10.0, "JPY": 500.0, "MXN": 100.0,
 }
 
-# Cache for symbol LOT_SIZE info
-_lot_size_cache: dict[str, tuple[float, float]] = {}
+# Cache for symbol filters: pair -> (min_qty, step_size, min_notional)
+_lot_size_cache: dict[str, tuple[float, float, float]] = {}
+
+
+def _get_symbol_filters(client, pair: str) -> tuple[float, float, float]:
+    """Return (min_qty, step_size, min_notional) for a pair, cached."""
+    if pair in _lot_size_cache:
+        return _lot_size_cache[pair]
+    min_qty = 0.00000001
+    step_size = 0.00000001
+    min_notional = 0.0
+    try:
+        info = client.get_exchange_info(symbol=pair)
+        for sym in info.get("symbols", []):
+            if sym["symbol"] != pair:
+                continue
+            for f in sym.get("filters", []):
+                ft = f.get("filterType")
+                if ft == "LOT_SIZE":
+                    min_qty = float(f.get("minQty", min_qty))
+                    step_size = float(f.get("stepSize", step_size))
+                elif ft == "NOTIONAL":
+                    # Modern Binance filter; applies to MARKET if applyMinToMarket
+                    try:
+                        candidate = float(f.get("minNotional", 0) or 0)
+                        if candidate > min_notional:
+                            min_notional = candidate
+                    except Exception:
+                        pass
+                elif ft == "MIN_NOTIONAL":
+                    try:
+                        candidate = float(f.get("minNotional", 0) or 0)
+                        if candidate > min_notional:
+                            min_notional = candidate
+                    except Exception:
+                        pass
+            break
+    except Exception:
+        logger.exception("exchangeInfo lookup failed for %s", pair)
+    _lot_size_cache[pair] = (min_qty, step_size, min_notional)
+    return _lot_size_cache[pair]
 
 
 def _floor_to_step_size(client, pair: str, qty: float) -> float:
     """Floor quantity to the pair's LOT_SIZE stepSize and check minQty.
     Returns a properly rounded float matching Binance precision."""
     import math
-    if pair not in _lot_size_cache:
-        info = client.get_exchange_info(symbol=pair)
-        min_qty = 0.00000001
-        step_size = 0.00000001
-        for sym in info.get("symbols", []):
-            if sym["symbol"] == pair:
-                for f in sym.get("filters", []):
-                    if f["filterType"] == "LOT_SIZE":
-                        min_qty = float(f["minQty"])
-                        step_size = float(f["stepSize"])
-                        break
-                break
-        _lot_size_cache[pair] = (min_qty, step_size)
-
-    min_qty, step_size = _lot_size_cache[pair]
+    min_qty, step_size, _ = _get_symbol_filters(client, pair)
     if qty < min_qty:
         return 0.0
     if step_size > 0:
@@ -308,6 +345,17 @@ def _floor_to_step_size(client, pair: str, qty: float) -> float:
         floored = round(floored, precision)  # Remove floating-point noise
         return floored if floored >= min_qty else 0.0
     return qty
+
+
+def _get_pair_price(client, pair: str) -> float:
+    """Latest market price for a pair. 0.0 on failure."""
+    try:
+        resp = client.get_ticker_price(symbol=pair)
+        if isinstance(resp, dict):
+            return float(resp.get("price", 0) or 0)
+    except Exception:
+        logger.exception("get_ticker_price failed for %s", pair)
+    return 0.0
 
 
 def _get_allocation(user, quote_bal: float) -> float:
@@ -411,6 +459,13 @@ def _execute_live_buy(client, user, symbol: str, balances: list[dict]) -> dict |
         if spot_free < allocation:
             allocation = spot_free  # Use whatever we could redeem
 
+        # Pre-check NOTIONAL: quote allocation must be >= minNotional, else Binance rejects -1013.
+        _, _, _alt_min_notional = _get_symbol_filters(client, alt_pair)
+        if _alt_min_notional > 0 and allocation < _alt_min_notional:
+            logger.info("LIVE %s: BUY %s allocation %.4f %s < minNotional %.4f, pomijam",
+                        user.username, alt_pair, allocation, q, _alt_min_notional)
+            continue  # Try next quote
+
         return _place_buy_order(client, user, alt_pair, q, allocation)
 
     # ---------- 2. BRIDGE BUY: convert held currency → needed quote → ALT ----------
@@ -448,6 +503,12 @@ def _execute_live_buy(client, user, symbol: str, balances: list[dict]) -> dict |
                 src_allocation = src_spot
 
             convert_pair = f"{target_quote}{source_currency}"
+            # Pre-check NOTIONAL on bridge step1: src_allocation (in source_currency) must be >= minNotional.
+            _, _, _bridge_min_notional = _get_symbol_filters(client, convert_pair)
+            if _bridge_min_notional > 0 and src_allocation < _bridge_min_notional:
+                logger.info("LIVE %s: bridge step1 %s alloc %.4f %s < minNotional %.4f, pomijam",
+                            user.username, convert_pair, src_allocation, source_currency, _bridge_min_notional)
+                continue  # Try next source
             logger.info("LIVE %s: bridge %s via %s->%s->%s (%.4f %s)",
                         user.username, symbol, source_currency, target_quote, symbol,
                         src_allocation, source_currency)
