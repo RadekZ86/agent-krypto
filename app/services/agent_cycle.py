@@ -85,27 +85,38 @@ def _convert_dust_for_live_users() -> None:
 
         try:
             dust_resp = client.get_dust_assets()
-            if not isinstance(dust_resp, dict) or "error" in dust_resp:
-                # Cicho — endpoint moze byc nieobecny / brak permisji. Loguj raz na 30min.
+            # Binance moze zwrocic: dict {"details":[...], ...}, dict {"error":...}, lub pusta liste [] / list[dict].
+            if isinstance(dust_resp, dict) and "error" in dust_resp:
                 if _should_log_skip(user.username, "DUST_CONVERT", "fetch_failed"):
-                    logger.info("LIVE %s: dust-btc lookup nieudany: %s", user.username,
-                                (dust_resp or {}).get("error", "no response"))
+                    logger.info("LIVE %s: dust-btc lookup error: %s", user.username,
+                                dust_resp.get("error", "?"))
+                # Zapisz znacznik 24h zeby nie spamowac endpointa
+                LiveOrderLog(
+                    username=user.username, symbol="-", action="DUST_CONVERT", status="error",
+                    detail=f"fetch: {str(dust_resp.get('error',''))[:200]}",
+                ).save()
                 continue
 
-            details = dust_resp.get("details", []) or []
+            if isinstance(dust_resp, dict):
+                details = dust_resp.get("details", []) or []
+            elif isinstance(dust_resp, list):
+                details = dust_resp
+            else:
+                details = []
+
             # Filtr: pomin BNB/quote/strategiczne i otwarte pozycje
             assets_to_convert: list[str] = []
             for d in details:
-                asset = str(d.get("asset", "")).upper()
+                asset = str(d.get("asset", "")).upper() if isinstance(d, dict) else ""
                 if not asset or asset in _DUST_SKIP_ASSETS or asset in open_symbols:
                     continue
                 assets_to_convert.append(asset)
 
             if not assets_to_convert:
-                # Zaloguj heartbeat raz dziennie (skip-log throttle 30min nie pasuje, uzyj LiveOrderLog 24h cutoff)
+                # Zaloguj heartbeat: brak kwalifikujacych sie pylkow (Binance min dust ~0.0001 BTC)
                 LiveOrderLog(
                     username=user.username, symbol="-", action="DUST_CONVERT", status="noop",
-                    detail="brak kwalifikujacych sie pylkow",
+                    detail=f"brak kwalifikujacych sie pylkow (Binance API zwrocil {len(details)} pozycji)",
                 ).save()
                 continue
 
